@@ -4,9 +4,15 @@ import { Toaster } from 'react-hot-toast';
 import { AnimatePresence } from 'framer-motion';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
+import { NotificationProvider } from './context/NotificationContext';
+import { CallProvider } from './context/CallContext';
+import { ConversationProvider } from './context/ConversationContext';
 import Home from './pages/Home';
 import Chat from './pages/Chat';
 import Waiting from './pages/Waiting';
+import DMChat from './pages/DMChat';
+import Profile from './pages/Profile';
+import VideoCall from './pages/VideoCall';
 import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
 
@@ -33,31 +39,13 @@ function AppRoutes() {
     <AnimatePresence mode="wait">
       <Routes location={location} key={location.pathname}>
         <Route path="/" element={<Home />} />
-        <Route
-          path="/chat/:roomCode"
-          element={
-            <ProtectedRoute>
-              <Chat />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/waiting/:roomCode"
-          element={
-            <ProtectedRoute>
-              <Waiting />
-            </ProtectedRoute>
-          }
-        />
+        <Route path="/chat/:roomCode" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+        <Route path="/waiting/:roomCode" element={<ProtectedRoute><Waiting /></ProtectedRoute>} />
+        <Route path="/dm/:dmId" element={<ProtectedRoute><DMChat /></ProtectedRoute>} />
+        <Route path="/profile/:username" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+        <Route path="/call/video/:userId" element={<ProtectedRoute><VideoCall /></ProtectedRoute>} />
         <Route path="/admin/login" element={<AdminLogin />} />
-        <Route
-          path="/admin"
-          element={
-            <AdminProtectedRoute>
-              <AdminDashboard />
-            </AdminProtectedRoute>
-          }
-        />
+        <Route path="/admin" element={<AdminProtectedRoute><AdminDashboard /></AdminProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AnimatePresence>
@@ -67,18 +55,20 @@ function AppRoutes() {
 function App() {
   useEffect(() => {
     const theme = localStorage.getItem('theme');
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    document.documentElement.classList.toggle('dark', theme === 'dark');
   }, []);
 
   return (
     <BrowserRouter>
       <AuthProvider>
         <SocketProvider>
-          <AppRoutes />
+          <CallProvider>
+            <ConversationProvider>
+              <NotificationProvider>
+                <AppRoutes />
+              </NotificationProvider>
+            </ConversationProvider>
+          </CallProvider>
         </SocketProvider>
         <Toaster
           position="top-right"
@@ -95,12 +85,8 @@ function App() {
               fontWeight: '500',
               padding: '12px 16px',
             },
-            success: {
-              iconTheme: { primary: '#10B981', secondary: '#fff' },
-            },
-            error: {
-              iconTheme: { primary: '#EF4444', secondary: '#fff' },
-            },
+            success: { iconTheme: { primary: '#10B981', secondary: '#fff' } },
+            error:   { iconTheme: { primary: '#EF4444', secondary: '#fff' } },
           }}
         />
       </AuthProvider>

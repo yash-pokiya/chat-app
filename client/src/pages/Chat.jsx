@@ -14,8 +14,17 @@ import useScreenshotDetection from '../hooks/useScreenshotDetection';
 import {
   Send, ArrowLeft, Hash, Wifi, WifiOff, Loader2,
   ImageIcon, Camera, Copy, Check, Info, Clock,
-  Mic, Flame, Sun, Moon, Palette, X, ShieldAlert, Lock
+  Mic, Flame, Sun, Moon, Palette, X, ShieldAlert, Lock,
+  MapPin, Pencil, FileText, Timer
 } from 'lucide-react';
+import PinnedMessage from '../components/PinnedMessage';
+import { ReplyBar } from '../components/ReplyPreview';
+import SharedNotepad from '../components/SharedNotepad';
+import DrawingCanvas from '../components/DrawingCanvas';
+import TimerBubble from '../components/TimerBubble';
+import LocationBubble from '../components/LocationBubble';
+import { useLocation } from '../hooks/useLocation';
+import UploadingBubble from '../components/UploadingBubble';
 
 const wallpapers = [
   { id: 'white', name: 'Default', bg: '#FFFFFF', darkBg: '#090d16' },
@@ -131,6 +140,7 @@ export default function Chat() {
   const [partnerTyping, setPartnerTyping] = useState(false);
   const [partner, setPartner] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploads, setUploads] = useState([]);
 
   // Feature upgrades states
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
@@ -139,6 +149,14 @@ export default function Chat() {
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
   const [burnMode, setBurnMode] = useState(false);
+  const [pinnedMessage, setPinnedMessage] = useState(null);
+  const [showNotepad, setShowNotepad] = useState(false);
+  const [showDrawing, setShowDrawing] = useState(false);
+  const [showTimerInput, setShowTimerInput] = useState(false);
+  const [timerMinutes, setTimerMinutes] = useState('5');
+  const [timerState, setTimerState] = useState(null);
+
+  const location = useLocation({ socket, roomCode });
 
   // Mic state
   const [isRecording, setIsRecording] = useState(false);
@@ -191,7 +209,10 @@ export default function Chat() {
         setPartner(p || null);
         if (roomData.isReady) {
           const msgRes = await api.get(`/chat/${roomData.id}/messages`);
-          setMessages(msgRes.data.messages || []);
+          const history = msgRes.data.messages || [];
+          setMessages(history);
+          const pinned = history.find((m) => m.isPinned);
+          if (pinned) setPinnedMessage(pinned);
         }
       } catch (err) {
         toast.error(err.message || 'Could not load room.');
@@ -221,7 +242,10 @@ export default function Chat() {
         api.get(`/chat/${res.roomId}/messages`)
           .then((msgRes) => {
             console.log('📡 Messages synced on join-room:', msgRes.data.messages?.length);
-            setMessages(msgRes.data.messages || []);
+            const history = msgRes.data.messages || [];
+            setMessages(history);
+            const pinned = history.find((m) => m.isPinned);
+            if (pinned) setPinnedMessage(pinned);
           })
           .catch((err) => console.error('❌ Failed to sync messages:', err));
       }
@@ -317,6 +341,18 @@ export default function Chat() {
       );
     };
 
+    const onMessagePinned = ({ message }) => setPinnedMessage(message);
+    const onMessageUnpinned = () => setPinnedMessage(null);
+
+    // Timer events
+    const onTimerStarted = ({ seconds, totalSeconds }) => setTimerState({ seconds, totalSeconds, isRunning: true });
+    const onTimerTick = ({ seconds, totalSeconds, isRunning }) => setTimerState({ seconds, totalSeconds, isRunning });
+    const onTimerEnded = () => {
+      setTimerState(null);
+      toast('⏱️ Timer ended!', { icon: '🔔', duration: 5000 });
+    };
+    const onTimerCancelled = () => setTimerState(null);
+
     socket.on('new-message', onNewMessage);
     socket.on('user-joined', onUserJoined);
     socket.on('user-offline', onUserOffline);
@@ -326,6 +362,12 @@ export default function Chat() {
     socket.on('message:reacted', onMessageReacted);
     socket.on('message:destructed', onMessageDestructed);
     socket.on('messages:delivered', onMessagesDelivered);
+    socket.on('message:pinned', onMessagePinned);
+    socket.on('message:unpinned', onMessageUnpinned);
+    socket.on('timer:started', onTimerStarted);
+    socket.on('timer:tick', onTimerTick);
+    socket.on('timer:ended', onTimerEnded);
+    socket.on('timer:cancelled', onTimerCancelled);
 
     return () => {
       socket.off('new-message', onNewMessage);
@@ -337,6 +379,12 @@ export default function Chat() {
       socket.off('message:reacted', onMessageReacted);
       socket.off('message:destructed', onMessageDestructed);
       socket.off('messages:delivered', onMessagesDelivered);
+      socket.off('message:pinned', onMessagePinned);
+      socket.off('message:unpinned', onMessageUnpinned);
+      socket.off('timer:started', onTimerStarted);
+      socket.off('timer:tick', onTimerTick);
+      socket.off('timer:ended', onTimerEnded);
+      socket.off('timer:cancelled', onTimerCancelled);
     };
   }, [socket, user]);
 
@@ -493,6 +541,19 @@ export default function Chat() {
 
   const handleMediaUpload = useCallback(async (file) => {
     if (!file || !room) return;
+    if (file.size > 10 * 1024 * 1024) { toast.error('Image must be under 10MB.'); return; }
+
+    const uploadId = Date.now().toString();
+    const previewUrl = URL.createObjectURL(file);
+
+    // 1. Add pending upload bubble INSTANTLY:
+    setUploads((prev) => [...prev, {
+      id: uploadId,
+      preview: previewUrl,
+      progress: 0,
+      status: 'uploading',
+    }]);
+
     setUploading(true);
     const formData = new FormData();
     formData.append('image', file);
@@ -500,8 +561,21 @@ export default function Chat() {
     try {
       const { data } = await api.post('/chat/media/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+            setUploads((prev) => prev.map((u) =>
+              u.id === uploadId ? { ...u, progress: pct } : u
+            ));
+          }
+        }
       });
       if (data.success) {
+        // 2. Mark as done:
+        setUploads((prev) => prev.map((u) =>
+          u.id === uploadId ? { ...u, progress: 100, status: 'done' } : u
+        ));
+
         socket.emit('send-message', {
           roomId: room.id,
           content: data.url,
@@ -512,9 +586,25 @@ export default function Chat() {
         });
         setReplyTo(null);
         toast.success('Image sent!');
+
+        // 3. Remove upload bubble after 500ms:
+        setTimeout(() => {
+          setUploads((prev) => prev.filter((u) => u.id !== uploadId));
+          URL.revokeObjectURL(previewUrl);
+        }, 500);
+      } else {
+        throw new Error('Upload failed');
       }
     } catch (err) {
+      console.error(err);
+      setUploads((prev) => prev.map((u) =>
+        u.id === uploadId ? { ...u, status: 'error' } : u
+      ));
       toast.error(err.message || 'Upload failed.');
+      setTimeout(() => {
+        setUploads((prev) => prev.filter((u) => u.id !== uploadId));
+        URL.revokeObjectURL(previewUrl);
+      }, 3000);
     } finally {
       setUploading(false);
     }
@@ -527,6 +617,42 @@ export default function Chat() {
       userId: user.id,
       roomCode
     });
+  };
+
+  const handlePin = (msg) => {
+    socket?.emit('message:pin', { messageId: msg._id, roomCode });
+  };
+
+  const handleUnpin = () => {
+    socket?.emit('message:unpin', { roomCode });
+    setPinnedMessage(null);
+  };
+
+  const handleStartTimer = () => {
+    const mins = parseInt(timerMinutes, 10);
+    if (isNaN(mins) || mins < 1) { toast.error('Enter a valid number of minutes'); return; }
+    socket?.emit('timer:start', { roomCode, seconds: mins * 60 });
+    setShowTimerInput(false);
+  };
+
+  const handlePauseTimer = () => {
+    socket?.emit('timer:pause', { roomCode });
+  };
+
+  const handleCancelTimer = () => {
+    socket?.emit('timer:cancel', { roomCode });
+  };
+
+  const handleImageSend = (url, cloudinaryId) => {
+    socket?.emit('send-message', {
+      roomId: room.id,
+      content: url,
+      type: 'image',
+      cloudinaryId,
+      replyTo: replyTo?._id || null,
+      isSelfDestruct: burnMode
+    });
+    setReplyTo(null);
   };
 
   const handleLeave = async () => {
@@ -560,6 +686,24 @@ export default function Chat() {
       exit="exit"
       className="h-screen bg-surface-soft dark:bg-gray-950 flex flex-col overflow-hidden transition-colors duration-300"
     >
+      {/* Notepad */}
+      {showNotepad && (
+        <SharedNotepad
+          roomCode={roomCode}
+          socket={socket}
+          onClose={() => setShowNotepad(false)}
+        />
+      )}
+
+      {/* Drawing canvas */}
+      {showDrawing && (
+        <DrawingCanvas
+          onSend={handleImageSend}
+          onClose={() => setShowDrawing(false)}
+          roomCode={roomCode}
+        />
+      )}
+
       {/* ── Top bar (frosted) ── */}
       <header className="frosted-bar dark:bg-gray-900/80 dark:border-gray-800 px-4 py-3 flex items-center gap-3 z-20 shrink-0">
         <motion.button
@@ -590,6 +734,24 @@ export default function Chat() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Shared Notepad */}
+          <button
+            onClick={() => setShowNotepad(true)}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-violet-500 dark:hover:text-violet-400 transition-colors"
+            title="Shared Notepad"
+          >
+            <FileText size={18} />
+          </button>
+
+          {/* Shared Timer */}
+          <button
+            onClick={() => setShowTimerInput(true)}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-violet-500 dark:hover:text-violet-400 transition-colors"
+            title="Shared Timer"
+          >
+            <Timer size={18} />
+          </button>
+
           {/* Wallpaper picker trigger */}
           <button
             onClick={() => setShowWallpaperPicker(true)}
@@ -640,6 +802,17 @@ export default function Chat() {
         </p>
       </div>
 
+      {/* Pinned message */}
+      {pinnedMessage && (
+        <PinnedMessage
+          message={pinnedMessage}
+          onScrollTo={() => {
+            document.getElementById(`msg-${pinnedMessage._id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }}
+          onUnpin={handleUnpin}
+        />
+      )}
+
       {/* ── Main content ── */}
       {!isReady ? (
         <WaitingRoom roomCode={roomCode} />
@@ -685,6 +858,37 @@ export default function Chat() {
                   const showAvatar = !prevMsg ||
                     (prevMsg.senderId?._id || prevMsg.senderId)?.toString() !==
                     (msg.senderId?._id || msg.senderId)?.toString();
+
+                  if (msg.type === 'location') {
+                    return (
+                      <div key={msg._id || idx} className={`flex gap-2 ${isSent ? 'justify-end' : 'justify-start'} my-2`}>
+                        <LocationBubble
+                          id={msg._id || idx}
+                          myCoords={location.myCoords}
+                          partnerCoords={location.partnerCoords}
+                          myUsername={user?.username}
+                          partnerUsername={partner?.username}
+                          distance={location.distance}
+                          partnerStopped={location.partnerStopped}
+                        />
+                      </div>
+                    );
+                  }
+
+                  if (msg.type === 'timer') {
+                    return timerState ? (
+                      <div key={msg._id || idx} className="flex justify-center my-2">
+                        <TimerBubble
+                          seconds={timerState.seconds}
+                          totalSeconds={timerState.totalSeconds}
+                          isRunning={timerState.isRunning}
+                          onPause={handlePauseTimer}
+                          onCancel={handleCancelTimer}
+                        />
+                      </div>
+                    ) : null;
+                  }
+
                   return (
                     <MessageBubble
                       key={msg._id || idx}
@@ -694,6 +898,7 @@ export default function Chat() {
                       partnerName={partner?.username}
                       onReact={(emoji) => handleReact(msg._id, emoji)}
                       onReply={(targetMsg) => setReplyTo(targetMsg)}
+                      onPin={handlePin}
                       socket={socket}
                       roomCode={roomCode}
                       user={user}
@@ -703,10 +908,42 @@ export default function Chat() {
               )}
             </AnimatePresence>
 
+            {/* Live timer in chat */}
+            {timerState && (
+              <div className="flex justify-center my-2">
+                <TimerBubble
+                  seconds={timerState.seconds}
+                  totalSeconds={timerState.totalSeconds}
+                  isRunning={timerState.isRunning}
+                  onPause={handlePauseTimer}
+                  onCancel={handleCancelTimer}
+                />
+              </div>
+            )}
+
+            {/* Location sharing indicator */}
+            {(location.isSharing || location.partnerCoords) && (
+              <div className="flex justify-center my-2">
+                <LocationBubble
+                  id="live"
+                  myCoords={location.myCoords}
+                  partnerCoords={location.partnerCoords}
+                  myUsername={user?.username}
+                  partnerUsername={partner?.username}
+                  distance={location.distance}
+                  partnerStopped={location.partnerStopped}
+                />
+              </div>
+            )}
+
             {/* Typing indicator */}
             <AnimatePresence>
               {partnerTyping && <TypingIndicator username={partner?.username} />}
             </AnimatePresence>
+
+            {uploads.map((upload) => (
+              <UploadingBubble key={upload.id} upload={upload} />
+            ))}
 
             <div ref={messagesEndRef} />
           </div>
@@ -715,23 +952,8 @@ export default function Chat() {
           <div className="frosted-bar dark:bg-gray-900/90 dark:border-gray-800 px-3 py-3 shrink-0">
             {/* Quoted Message Preview above input bar */}
             {replyTo && (
-              <div className="mx-2 mb-2 px-3 py-2 bg-violet-50 dark:bg-violet-900/30 border-l-4 border-violet-500 rounded-xl flex justify-between items-center animate-slide-up">
-                <div className="min-w-0">
-                  <p className="text-[10px] text-violet-500 font-semibold uppercase tracking-wider">
-                    Replying to @{replyTo.senderId?.username || 'Partner'}
-                  </p>
-                  <p className="text-xs text-gray-600 dark:text-gray-300 truncate max-w-xs">
-                    {replyTo.type === 'audio' ? '🎵 Voice message'
-                      : replyTo.type === 'image' ? '🖼 Photo'
-                        : replyTo.content}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setReplyTo(null)}
-                  className="p-1 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                >
-                  <X size={14} />
-                </button>
+              <div className="animate-slide-up">
+                <ReplyBar replyingTo={replyTo} onCancel={() => setReplyTo(null)} />
               </div>
             )}
 
@@ -792,6 +1014,30 @@ export default function Chat() {
                 title="Take photo"
               >
                 <Camera size={17} />
+              </motion.button>
+
+              {/* Drawing canvas button ✏️ */}
+              <motion.button
+                whileTap={{ scale: 0.92 }}
+                onClick={() => setShowDrawing(true)}
+                className="w-10 h-10 rounded-xl flex items-center justify-center text-ink-muted bg-surface-soft hover:bg-brand-50 hover:text-brand-500 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-violet-900/30 transition-all shrink-0 border border-border"
+                title="Draw sketch"
+              >
+                <Pencil size={17} />
+              </motion.button>
+
+              {/* Location button 📍 */}
+              <motion.button
+                whileTap={{ scale: 0.92 }}
+                onClick={() => location.isSharing ? location.stop() : location.start()}
+                className={`w-10 h-10 rounded-xl flex items-center justify-center border transition-all duration-200 shrink-0 ${
+                  location.isSharing
+                    ? 'bg-violet-100 text-violet-500 border-violet-200'
+                    : 'text-ink-muted bg-surface-soft border-border hover:bg-brand-50 hover:text-brand-500 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-violet-900/30'
+                }`}
+                title="Share Live Location"
+              >
+                <MapPin size={17} />
               </motion.button>
 
               {/* Hidden inputs */}
@@ -945,6 +1191,31 @@ export default function Chat() {
               </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+
+      {/* Timer input modal */}
+      <AnimatePresence>
+        {showTimerInput && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowTimerInput(false); }}>
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}
+              className="bg-white dark:bg-gray-900 rounded-3xl p-6 w-72 shadow-2xl">
+              <h3 className="font-bold text-gray-900 dark:text-gray-100 mb-4 text-center">⏱️ Set Shared Timer</h3>
+              <div className="flex items-center gap-3 mb-4">
+                <input type="number" min={1} max={60} value={timerMinutes}
+                  onChange={(e) => setTimerMinutes(e.target.value)}
+                  className="flex-1 text-center text-3xl font-bold border-2 border-violet-200 dark:border-gray-700 rounded-2xl py-3 outline-none focus:border-violet-500 bg-transparent text-gray-900 dark:text-gray-100"
+                />
+                <span className="text-gray-400 dark:text-gray-500 font-medium">min</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowTimerInput(false)} className="flex-1 py-2.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-xl text-sm font-medium">Cancel</button>
+                <button onClick={handleStartTimer} className="flex-1 py-2.5 bg-violet-500 text-white rounded-xl text-sm font-semibold">Start ▶</button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </motion.div>

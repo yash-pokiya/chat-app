@@ -1,8 +1,20 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    nodePolyfills({
+      // simple-peer needs these Node.js built-ins
+      include: ['buffer', 'process', 'util', 'events', 'stream'],
+      globals: {
+        Buffer: true,
+        global: true,
+        process: true,
+      },
+    }),
+  ],
   server: {
     port: 5173,
     proxy: {
@@ -19,6 +31,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['@emoji-mart/react', 'emoji-mart', '@emoji-mart/data'],
+    include: ['@emoji-mart/react', 'emoji-mart', '@emoji-mart/data', 'simple-peer'],
   },
 })

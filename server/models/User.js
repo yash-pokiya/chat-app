@@ -8,14 +8,68 @@ const userSchema = new mongoose.Schema(
       required: [true, 'Username is required'],
       unique: true,
       trim: true,
+      lowercase: true,
       minlength: [3, 'Username must be at least 3 characters'],
       maxlength: [20, 'Username cannot exceed 20 characters'],
       match: [/^[a-zA-Z0-9_]+$/, 'Username can only contain letters, numbers, and underscores'],
+    },
+    displayName: {
+      type: String,
+      trim: true,
+      maxlength: [40, 'Display name cannot exceed 40 characters'],
+      default: '',
+    },
+    avatar: {
+      type: String,
+      default: '',
+    },
+    bio: {
+      type: String,
+      maxlength: [120, 'Bio cannot exceed 120 characters'],
+      default: '',
     },
     passwordHash: {
       type: String,
       required: [true, 'Password is required'],
     },
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
+    lastSeen: {
+      type: Date,
+      default: null,
+    },
+    friends: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    sentRequests: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    receivedRequests: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    following: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    followers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
     isBanned: {
       type: Boolean,
       default: false,
@@ -28,6 +82,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    quickEmojis: {
+      type: [String],
+      default: ['❤️', '😂', '😮', '😢', '👍'],
+      validate: v => v.length === 5,
+    },
     createdAt: {
       type: Date,
       default: Date.now,
@@ -37,7 +96,6 @@ const userSchema = new mongoose.Schema(
 );
 
 // Hash password before saving
-// Mongoose 7+ async pre-hooks: don't call next(), just return the Promise
 userSchema.pre('save', async function () {
   if (!this.isModified('passwordHash')) return;
   const salt = await bcrypt.genSalt(12);
@@ -53,6 +111,8 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
 userSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.passwordHash;
+  delete obj.bannedIP;
+  delete obj.lastIP;
   return obj;
 };
 

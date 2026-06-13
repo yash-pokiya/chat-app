@@ -26,11 +26,16 @@ const mediaSchema = new mongoose.Schema(
     roomId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Room',
-      required: true,
+      required: false,
     },
     roomCode: {
       type: String,
-      required: true,
+      required: false,
+    },
+    dmId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'DM',
+      required: false,
     },
     fileSize: {
       type: Number,
@@ -42,7 +47,9 @@ const mediaSchema = new mongoose.Schema(
     },
     expiresAt: {
       type: Date,
-      default: () => new Date(Date.now() + 24 * 60 * 60 * 1000),
+      default: function() {
+        return this.dmId ? null : new Date(Date.now() + 24 * 60 * 60 * 1000);
+      },
     },
   },
   { timestamps: false }

@@ -286,4 +286,34 @@
   .animate-fadeIn {
     animation: fadeIn 0.35s ease-out forwards;
   }
+
+  /* Audio call / incoming call pulse ring */
+  @keyframes pulseRing {
+    0%   { transform: translate(-50%, -50%) scale(0.7); opacity: 0.6; }
+    100% { transform: translate(-50%, -50%) scale(1.4); opacity: 0; }
+  }
+
+  /* Blob background animations */
+  @keyframes blob {
+    0%, 100% { border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%; }
+    50%       { border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%; }
+  }
+  .animate-blob       { animation: blob 8s ease-in-out infinite; }
+  .animate-blob-delay { animation: blob 9s ease-in-out infinite 2s; }
+  .animate-blob-delay2{ animation: blob 10s ease-in-out infinite 4s; }
+
+  /* Leaflet z-index fix */
+  .leaflet-pane { z-index: 1 !important; }
+  .leaflet-control { z-index: 2 !important; }
+  .leaflet-top, .leaflet-bottom { z-index: 2 !important; }
+
+  /* PopIn animation for Reaction Bar */
+  @keyframes popIn {
+    0%   { opacity: 0; transform: scale(0.7) translateY(8px); }
+    70%  { transform: scale(1.05) translateY(-2px); }
+    100% { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .animate-popIn {
+    animation: popIn 0.25s ease-out forwards;
+  }
 }

@@ -6,14 +6,14 @@ const SocketContext = createContext(null);
 
 export const SocketProvider = ({ children }) => {
   const { user } = useAuth();
-  const socketRef = useRef(null);
+  const [socket, setSocket] = useState(null);
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     if (!user) {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
+      if (socket) {
+        socket.disconnect();
+        setSocket(null);
         setConnected(false);
       }
       return;
@@ -22,36 +22,38 @@ export const SocketProvider = ({ children }) => {
     const token = localStorage.getItem('token');
 
     // Connect to the backend (proxied via Vite)
-    socketRef.current = io('/', {
+    const socketInstance = io('/', {
       auth: { token },
       withCredentials: true,
       transports: ['websocket', 'polling'],
     });
 
-    socketRef.current.on('connect', () => {
-      console.log('[Socket] Connected:', socketRef.current.id);
+    setSocket(socketInstance);
+
+    socketInstance.on('connect', () => {
+      console.log('[Socket] Connected:', socketInstance.id);
       setConnected(true);
     });
 
-    socketRef.current.on('disconnect', (reason) => {
+    socketInstance.on('disconnect', (reason) => {
       console.log('[Socket] Disconnected:', reason);
       setConnected(false);
     });
 
-    socketRef.current.on('connect_error', (err) => {
+    socketInstance.on('connect_error', (err) => {
       console.error('[Socket] Connection error:', err.message);
       setConnected(false);
     });
 
     return () => {
-      socketRef.current?.disconnect();
-      socketRef.current = null;
+      socketInstance.disconnect();
+      setSocket(null);
       setConnected(false);
     };
   }, [user]);
 
   return (
-    <SocketContext.Provider value={{ socket: socketRef.current, connected }}>
+    <SocketContext.Provider value={{ socket, connected }}>
       {children}
     </SocketContext.Provider>
   );

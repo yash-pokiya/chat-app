@@ -12,6 +12,9 @@ const authRoutes = require('./routes/authRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const friendRoutes = require('./routes/friendRoutes');
+const dmRoutes = require('./routes/dmRoutes');
+const profileRoutes = require('./routes/profileRoutes');
 const socketHandler = require('./socket/socketHandler');
 const { initCronJobs } = require('./utils/cronJobs');
 
@@ -44,7 +47,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Global rate limiter
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 200,
   message: { success: false, message: 'Too many requests, please try again later.' },
   standardHeaders: true,
@@ -62,10 +65,14 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
-app.use('/api/auth', authRoutes);
-app.use('/api/rooms', roomRoutes);
-app.use('/api/chat', chatRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/auth',    authRoutes);
+app.use('/api/rooms',   roomRoutes);
+app.use('/api/chat',    chatRoutes);
+app.use('/api/admin',   adminRoutes);
+app.use('/api/friends', friendRoutes);
+app.use('/api/dm',      dmRoutes);
+app.use('/api/profile', profileRoutes);
+app.use('/api/users',   profileRoutes); // alias for /api/users/search
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -98,7 +105,6 @@ mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => {
     console.log('[MongoDB] Connected successfully');
-
     server.listen(PORT, () => {
       console.log(`[Server] Running on http://localhost:${PORT}`);
       console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);

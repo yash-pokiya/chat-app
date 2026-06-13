@@ -1,8 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
-const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+const generateToken = (userId, username) => {
+  return jwt.sign({ id: userId, username }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };
@@ -16,10 +16,26 @@ const setTokenCookie = (res, token) => {
   });
 };
 
+const formatUser = (user) => ({
+  id: user._id,
+  username: user.username,
+  displayName: user.displayName || user.username,
+  avatar: user.avatar || '',
+  bio: user.bio || '',
+  isOnline: user.isOnline,
+  lastSeen: user.lastSeen,
+  friends: user.friends || [],
+  sentRequests: user.sentRequests || [],
+  receivedRequests: user.receivedRequests || [],
+  following: user.following || [],
+  followers: user.followers || [],
+  createdAt: user.createdAt,
+});
+
 // POST /api/auth/register
 const register = async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, displayName } = req.body;
 
     if (!username || !password) {
       return res.status(400).json({ success: false, message: 'Username and password are required.' });
@@ -43,19 +59,20 @@ const register = async (req, res) => {
 
     const user = new User({
       username: username.toLowerCase(),
+      displayName: displayName || username,
       passwordHash: password,
       lastIP: clientIP,
     });
 
     await user.save();
 
-    const token = generateToken(user._id);
+    const token = generateToken(user._id, user.username);
     setTokenCookie(res, token);
 
     res.status(201).json({
       success: true,
       message: 'Account created successfully.',
-      user: { id: user._id, username: user.username },
+      user: formatUser(user),
       token,
     });
   } catch (err) {
@@ -94,18 +111,19 @@ const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
-    // Update last IP
+    // Update last IP and online status
     const clientIP = req.ip || req.connection.remoteAddress;
     user.lastIP = clientIP;
+    user.isOnline = true;
     await user.save({ validateBeforeSave: false });
 
-    const token = generateToken(user._id);
+    const token = generateToken(user._id, user.username);
     setTokenCookie(res, token);
 
     res.json({
       success: true,
       message: 'Logged in successfully.',
-      user: { id: user._id, username: user.username },
+      user: formatUser(user),
       token,
     });
   } catch (err) {
@@ -115,7 +133,14 @@ const login = async (req, res) => {
 };
 
 // POST /api/auth/logout
-const logout = (req, res) => {
+const logout = async (req, res) => {
+  try {
+    if (req.user) {
+      req.user.isOnline = false;
+      req.user.lastSeen = new Date();
+      await req.user.save({ validateBeforeSave: false });
+    }
+  } catch {}
   res.clearCookie('token', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
@@ -127,10 +152,12 @@ const logout = (req, res) => {
 // GET /api/auth/me
 const getMe = async (req, res) => {
   try {
-    res.json({
-      success: true,
-      user: { id: req.user._id, username: req.user.username },
-    });
+    const user = await User.findById(req.user._id)
+      .populate('friends', 'username displayName avatar isOnline lastSeen')
+      .populate('sentRequests', 'username displayName avatar')
+      .populate('receivedRequests', 'username displayName avatar');
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+    res.json({ success: true, user: formatUser(user) });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error.' });
   }

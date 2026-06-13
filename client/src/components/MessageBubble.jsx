@@ -2,11 +2,23 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Lightbox from 'yet-another-react-lightbox';
 import 'yet-another-react-lightbox/styles.css';
-import Picker from '@emoji-mart/react';
-import data from '@emoji-mart/data';
-import { Smile, CornerUpLeft, Volume2, Play, Pause, Copy, Check, Shield } from 'lucide-react';
+import { Smile, CornerUpLeft, Volume2, Play, Pause, Copy, Check, Shield, Pin } from 'lucide-react';
+import BlurredMedia from './BlurredMedia';
+import { QuotedMessage } from './ReplyPreview';
+import ReactionBar from './ReactionBar';
 
 const fmt = (d) => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+// Message formatting parser
+const parseFormatting = (text) => {
+  if (!text) return '';
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/_(.*?)_/g, '<em>$1</em>')
+    .replace(/~(.*?)~/g, '<del>$1</del>')
+    .replace(/`([^`]+)`/g, '<code class="bg-black/10 px-1 rounded text-xs font-mono">$1</code>')
+    .replace(/```([\s\S]*?)```/g, '<pre class="bg-black/10 rounded-lg p-2 text-xs font-mono overflow-x-auto mt-1 whitespace-pre-wrap">$1</pre>');
+};
 
 const SingleGrayTick = () => (
   <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3.5}>
@@ -117,13 +129,13 @@ function AudioPlayer({ src, duration, isSent }) {
   );
 }
 
-export default function MessageBubble({ message, isSent, showAvatar, partnerName, onReact, onReply, socket, roomCode, user }) {
+export default function MessageBubble({ message, isSent, showAvatar, partnerName, onReact, onReply, onPin, socket, roomCode, user }) {
   const [open, setOpen] = useState(false);
-  const [showPicker, setShowPicker] = useState(false);
+  const [showReactionBar, setShowReactionBar] = useState(false);
   const [floatingEmojis, setFloatingEmojis] = useState([]);
   const [timeLeft, setTimeLeft] = useState(10);
   const [isDestructed, setIsDestructed] = useState(false);
-  const pickerRef = useRef(null);
+  const longPressTimer = useRef(null);
 
   const isImage = message.type === 'image';
   const isAudio = message.type === 'audio';
@@ -164,24 +176,28 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
     return () => clearInterval(timer);
   }, [message.isSelfDestruct, message.destructsAt, socket, roomCode, message._id]);
 
-  // Handle outside click to close picker
-  useEffect(() => {
-    const handleOutsideClick = (e) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target)) {
-        setShowPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, []);
+  // Touch handlers for mobile long press
+  const onTouchStart = () => {
+    longPressTimer.current = setTimeout(() => {
+      setShowReactionBar(true);
+    }, 450);
+  };
 
-  const aggregateReactions = () => {
+  const onTouchEnd = () => {
+    clearTimeout(longPressTimer.current);
+  };
+
+  const getGroupedReactions = () => {
     if (!message.reactions) return [];
-    const counts = {};
+    const groups = {};
     message.reactions.forEach((r) => {
-      counts[r.emoji] = (counts[r.emoji] || 0) + 1;
+      if (!groups[r.emoji]) {
+        groups[r.emoji] = { emoji: r.emoji, count: 0, userIds: [] };
+      }
+      groups[r.emoji].count += 1;
+      groups[r.emoji].userIds.push(r.userId);
     });
-    return Object.entries(counts).map(([emoji, count]) => ({ emoji, count }));
+    return Object.values(groups);
   };
 
   return (
@@ -193,6 +209,9 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
       className={`group relative flex items-end gap-2 mb-2 p-1 rounded-2xl transition-all ${
         isSent ? 'flex-row-reverse' : 'flex-row'
       } ${isDestructed ? 'animate-self-destruct' : ''}`}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+      onTouchMove={() => clearTimeout(longPressTimer.current)}
     >
       {/* Floating Emojis */}
       <div className="absolute inset-0 pointer-events-none z-40 overflow-visible">
@@ -234,50 +253,25 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
           <div className="relative">
             {/* Quote Reply display inside message bubble */}
             {message.replyTo && (
-              <div
-                onClick={() => {
-                  const el = document.getElementById(`msg-${message.replyTo._id}`);
+              <QuotedMessage
+                replyTo={message.replyTo}
+                onScrollTo={(id) => {
+                  const el = document.getElementById(`msg-${id}`);
                   el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }}
-                className="bg-black/5 dark:bg-white/10 rounded-t-2xl rounded-b-md px-3 py-1.5 mb-1 border-l-4 border-violet-500 cursor-pointer text-left select-none text-xs w-full max-w-[280px]"
-              >
-                <p className="font-bold text-violet-600 dark:text-violet-400">
-                  @{message.replyTo.senderId?.username || 'Partner'}
-                </p>
-                <p className="text-gray-500 dark:text-gray-400 truncate">
-                  {message.replyTo.type === 'audio' ? '🎵 Voice message'
-                   : message.replyTo.type === 'image' ? '🖼 Photo'
-                   : message.replyTo.content}
-                </p>
-              </div>
+              />
             )}
 
             {/* Main content body */}
             {isImage ? (
-              <>
-                <motion.img
-                  src={message.content}
-                  alt="Shared image"
-                  className="rounded-2xl max-w-[220px] cursor-pointer object-cover border border-border/50 dark:border-gray-800"
-                  style={{ maxHeight: '200px' }}
-                  onClick={() => setOpen(true)}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  loading="lazy"
-                />
-                <Lightbox
-                  open={open}
-                  close={() => setOpen(false)}
-                  slides={[{ src: message.content }]}
-                />
-              </>
+              <BlurredMedia src={message.content} />
             ) : isAudio ? (
               <div className={isSent ? 'bubble-sent dark:bg-violet-900/50' : 'bubble-recv dark:bg-gray-800'}>
                 <AudioPlayer src={message.content} duration={message.duration} isSent={isSent} />
               </div>
             ) : (
               <div className={isSent ? 'bubble-sent dark:bg-violet-900/50' : 'bubble-recv dark:bg-gray-800'}>
-                <p className="break-words whitespace-pre-wrap leading-relaxed text-sm dark:text-white">{message.content}</p>
+                <p dangerouslySetInnerHTML={{ __html: parseFormatting(message.content) }} className="break-words whitespace-pre-wrap leading-relaxed text-sm dark:text-white" />
               </div>
             )}
 
@@ -306,16 +300,26 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
         {/* Reactions HUD below bubble */}
         {message.reactions && message.reactions.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
-            {aggregateReactions().map((r, i) => (
-              <button
-                key={i}
-                onClick={() => onReact(r.emoji)}
-                className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full px-2.5 py-0.5 text-xs flex items-center gap-1 shadow-sm hover:scale-110 active:scale-95 transition-all text-gray-800 dark:text-gray-200 font-medium"
-              >
-                <span>{r.emoji}</span>
-                <span className="text-[10px] text-gray-500 dark:text-gray-400">{r.count}</span>
-              </button>
-            ))}
+            {getGroupedReactions().map((r, i) => {
+              const myId = user?.id || user?._id;
+              const hasReacted = r.userIds.includes(myId?.toString());
+              return (
+                <button
+                  key={i}
+                  onClick={() => onReact(r.emoji)}
+                  className={`border rounded-full px-2.5 py-0.5 text-xs flex items-center gap-1 shadow-sm hover:scale-110 active:scale-95 transition-all font-medium ${
+                    hasReacted
+                      ? 'bg-violet-100 border-violet-300 text-violet-700 dark:bg-violet-900/50 dark:border-violet-800 dark:text-violet-200'
+                      : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-200'
+                  }`}
+                >
+                  <span>{r.emoji}</span>
+                  <span className={hasReacted ? 'text-[10px] text-violet-600 dark:text-violet-300' : 'text-[10px] text-gray-500 dark:text-gray-400'}>
+                    {r.count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -337,30 +341,36 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
         >
           <CornerUpLeft size={13} />
         </button>
+        {onPin && (
+          <button
+            onClick={() => onPin(message)}
+            className="p-1.5 rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-violet-500 shadow-sm transition-transform active:scale-90"
+            title="Pin Message"
+          >
+            <Pin size={13} />
+          </button>
+        )}
         <div className="relative">
           <button
-            onClick={() => setShowPicker(!showPicker)}
+            onClick={() => setShowReactionBar(!showReactionBar)}
             className="p-1.5 rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-violet-500 shadow-sm transition-transform active:scale-90"
             title="React"
           >
             <Smile size={13} />
           </button>
           
-          {showPicker && (
-            <div ref={pickerRef} className={`absolute z-50 bottom-8 shadow-2xl border border-gray-200 dark:border-gray-700 rounded-3xl overflow-hidden ${
-              isSent ? 'right-0' : 'left-0'
-            }`}>
-              <Picker
-                data={data}
-                onEmojiSelect={(emoji) => {
-                  onReact(emoji.native);
-                  setShowPicker(false);
-                }}
-                theme={localStorage.getItem('theme') || 'light'}
-                perLine={8}
-                maxFrequentRows={1}
-              />
-            </div>
+          {showReactionBar && (
+            <ReactionBar
+              message={message}
+              currentUser={user}
+              onReact={(emoji) => {
+                onReact(emoji);
+                setShowReactionBar(false);
+              }}
+              onClose={() => setShowReactionBar(false)}
+              position="top"
+              isMe={isSent}
+            />
           )}
         </div>
       </div>
