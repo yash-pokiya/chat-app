@@ -10,12 +10,18 @@ import {
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 import EditQuickEmojis from '../components/EditQuickEmojis';
+import { OnlineDot, StatusText } from '../components/OnlineStatus';
+import useFriendStore from '../store/friendStore';
 
 export default function Profile() {
   const { username } = useParams();
   const { user: me, refreshUser } = useAuth();
   const { socket } = useSocket();
   const navigate = useNavigate();
+  const friends = useFriendStore((state) => state.friends);
+  const pendingRequests = useFriendStore((state) => state.pendingRequests);
+  const sentRequests = useFriendStore((state) => state.sentRequests);
+  const { addFriend, removeFriend, removePendingRequest, addSentRequest } = useFriendStore();
 
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -47,6 +53,41 @@ export default function Profile() {
   };
 
   useEffect(() => { loadProfile(); }, [username]);
+
+  useEffect(() => {
+    if (!profile) return;
+    const profileId = (profile.id || profile._id)?.toString();
+    if (!profileId) return;
+
+    const isFriend = friends.some((f) => (f._id || f.id || f)?.toString() === profileId);
+    if (isFriend) {
+      if (profile.relationship !== 'FRIENDS') {
+        setProfile((prev) => prev ? { ...prev, relationship: 'FRIENDS' } : null);
+      }
+      return;
+    }
+
+    const isPendingReceived = pendingRequests.some((r) => (r._id || r.id || r)?.toString() === profileId);
+    if (isPendingReceived) {
+      if (profile.relationship !== 'PENDING_RECEIVED') {
+        setProfile((prev) => prev ? { ...prev, relationship: 'PENDING_RECEIVED' } : null);
+      }
+      return;
+    }
+
+    const isPendingSent = sentRequests.some((r) => (r._id || r.id || r)?.toString() === profileId);
+    if (isPendingSent) {
+      if (profile.relationship !== 'PENDING_SENT') {
+        setProfile((prev) => prev ? { ...prev, relationship: 'PENDING_SENT' } : null);
+      }
+      return;
+    }
+
+    // Otherwise, stranger
+    if (profile.relationship !== 'SELF' && profile.relationship !== 'STRANGER' && profile.relationship !== 'FOLLOWING' && profile.relationship !== 'FOLLOWER') {
+      setProfile((prev) => prev ? { ...prev, relationship: 'STRANGER' } : null);
+    }
+  }, [friends, pendingRequests, sentRequests, profile?.id, profile?._id]);
 
   const handleSaveProfile = async () => {
     setSaving(true);
@@ -82,9 +123,11 @@ export default function Profile() {
   const handleFriendAction = async () => {
     setActionLoading(true);
     try {
+      const targetUserId = profile.id || profile._id;
       if (profile.relationship === 'FRIENDS') {
-        await api.delete(`/friends/remove/${profile.id}`);
-        socket?.emit('friend:unfriend', { userId: profile.id });
+        await api.delete(`/friends/remove/${targetUserId}`);
+        socket?.emit('friend:unfriend', { userId: targetUserId });
+        removeFriend(targetUserId);
         setProfile((prev) => ({
           ...prev,
           relationship: 'STRANGER',
@@ -94,8 +137,20 @@ export default function Profile() {
       } else if (profile.relationship === 'PENDING_SENT') {
         toast('Request already sent', { icon: '⏳' });
       } else if (profile.relationship === 'PENDING_RECEIVED') {
-        await api.post(`/friends/accept/${profile.id}`);
-        socket?.emit('friend:accept', { fromUserId: profile.id });
+        await api.post(`/friends/accept/${targetUserId}`);
+        const acceptingUser = {
+          _id: me._id || me.id,
+          username: me.username,
+          displayName: me.displayName,
+          avatar: me.avatar,
+        };
+        socket?.emit('friend:request:accept', {
+          fromUserId: me._id || me.id,
+          toUserId: targetUserId,
+          acceptingUser,
+        });
+        addFriend(profile);
+        removePendingRequest(targetUserId);
         setProfile((prev) => ({
           ...prev,
           relationship: 'FRIENDS',
@@ -104,7 +159,18 @@ export default function Profile() {
         toast.success('Friend request accepted!');
       } else {
         await api.post(`/friends/request/${profile.username}`);
-        socket?.emit('friend:request', { toUsername: profile.username });
+        const fromUser = {
+          _id: me._id || me.id,
+          username: me.username,
+          displayName: me.displayName,
+          avatar: me.avatar,
+        };
+        socket?.emit('friend:request:send', {
+          fromUserId: me._id || me.id,
+          toUserId: targetUserId,
+          fromUser,
+        });
+        addSentRequest(profile);
         setProfile((prev) => ({ ...prev, relationship: 'PENDING_SENT' }));
         toast.success('Friend request sent!');
       }
@@ -229,14 +295,10 @@ export default function Profile() {
                 <h2 className="text-xl font-bold text-gray-900">{profile.displayName || profile.username}</h2>
               )}
               <p className="text-gray-400 text-sm">@{profile.username}</p>
-              {profile.isOnline ? (
-                <div className="flex items-center gap-1.5 mt-1">
-                  <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-                  <span className="text-xs text-emerald-500 font-medium">Online now</span>
-                </div>
-              ) : profile.lastSeen && (
-                <p className="text-xs text-gray-400 mt-1">Last seen {new Date(profile.lastSeen).toLocaleDateString()}</p>
-              )}
+              <div className="flex items-center gap-1.5 mt-1">
+                <OnlineDot userId={profile.id || profile._id} size="sm" defaultOnline={profile.isOnline} className="border-0" />
+                <StatusText userId={profile.id || profile._id} defaultOnline={profile.isOnline} defaultLastSeen={profile.lastSeen} />
+              </div>
             </div>
           </div>
 
@@ -327,9 +389,7 @@ export default function Profile() {
                         {(friend.displayName || friend.username)[0].toUpperCase()}
                       </div>
                     )}
-                    {friend.isOnline && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 border-2 border-white rounded-full" />
-                    )}
+                    <OnlineDot userId={friend._id || friend.id} size="sm" defaultOnline={friend.isOnline} className="absolute -bottom-0.5 -right-0.5" />
                   </div>
                   <p className="text-xs text-gray-600 truncate w-full text-center">{friend.displayName || friend.username}</p>
                 </Link>

@@ -11,6 +11,7 @@ import {
   Sun, Moon, Search, Bell, MessageSquare, Shield, Check, X, ChevronRight
 } from 'lucide-react';
 import api from '../utils/api';
+import { OnlineDot } from '../components/OnlineStatus';
 
 const pageVariants = {
   initial: { opacity: 0, y: 20 },
@@ -148,7 +149,17 @@ export default function Home() {
     try {
       const { data } = await api.post(`/friends/accept/${fromUserId}`);
       if (data.success) {
-        socket?.emit('friend:accept', { fromUserId });
+        const acceptingUser = {
+          _id: user._id || user.id,
+          username: user.username,
+          displayName: user.displayName,
+          avatar: user.avatar,
+        };
+        socket?.emit('friend:request:accept', {
+          fromUserId: user._id || user.id,
+          toUserId: fromUserId,
+          acceptingUser,
+        });
         removeFromPending(fromUserId);
         toast.success('Friend request accepted! 🎉');
         refreshFriends();
@@ -159,6 +170,10 @@ export default function Home() {
   const handleDeclineRequest = async (fromUserId) => {
     try {
       await api.delete(`/friends/decline/${fromUserId}`);
+      socket?.emit('friend:request:decline', {
+        fromUserId: user._id || user.id,
+        toUserId: fromUserId,
+      });
       removeFromPending(fromUserId);
       toast.success('Request declined.');
     } catch (err) { toast.error(err.message); }
@@ -358,7 +373,7 @@ export default function Home() {
                           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-400 to-cyan-400 flex items-center justify-center text-white text-sm font-bold">
                             {(u.displayName || u.username)[0].toUpperCase()}
                           </div>
-                          {u.isOnline && <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-400 border-2 border-white rounded-full" />}
+                          <OnlineDot userId={u.id || u._id} size="sm" defaultOnline={u.isOnline} className="absolute -bottom-0.5 -right-0.5" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{u.displayName || u.username}</p>
@@ -412,9 +427,7 @@ export default function Home() {
                 >
                   <div className="relative flex-shrink-0">
                     <Avatar user={friend} size={10} />
-                    {friend.isOnline && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 border-2 border-white rounded-full" />
-                    )}
+                    <OnlineDot userId={friend.id || friend._id} size="md" defaultOnline={friend.isOnline} className="absolute -bottom-0.5 -right-0.5" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-gray-900 dark:text-gray-100 text-sm">{friend.displayName || friend.username}</p>

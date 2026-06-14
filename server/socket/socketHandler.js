@@ -4,9 +4,13 @@ const Message = require('../models/Message');
 const DM = require('../models/DM');
 const Notepad = require('../models/Notepad');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 
-// Track online users: { userId: socketId }
-const onlineUsers = new Map();
+// Track ALL sockets per user (multi-tab support)
+const userSockets = new Map();
+// Track which conversation each socket is currently viewing:
+const socketActiveChats = new Map();
+
 // Track typing per room/dm: { roomId: Set<userId> }
 const typingUsers = new Map();
 // Track active anonymous rooms: { roomCode: { code, users, createdAt, dbRoomId } }
@@ -14,7 +18,61 @@ const activeRooms = new Map();
 // Track active shared timers: { roomCode: { seconds, totalSeconds, interval, isRunning } }
 const activeTimers = new Map();
 
+// Helper functions for multi-tab support
+const setUserOnline = (userId, socketId) => {
+  if (!userId) return;
+  const uid = userId.toString();
+  if (!userSockets.has(uid)) {
+    userSockets.set(uid, new Set());
+  }
+  userSockets.get(uid).add(socketId);
+};
+
+const setUserOffline = (userId, socketId) => {
+  if (!userId) return false;
+  const uid = userId.toString();
+  if (!userSockets.has(uid)) return false;
+  userSockets.get(uid).delete(socketId);
+  if (userSockets.get(uid).size === 0) {
+    userSockets.delete(uid);
+    return true; // truly offline now
+  }
+  return false; // still has other tabs open
+};
+
+const isUserOnline = (userId) => {
+  if (!userId) return false;
+  const uid = userId.toString();
+  return userSockets.has(uid) && userSockets.get(uid).size > 0;
+};
+
+const isChatOpenForUser = (userId, conversationId) => {
+  if (!userId || !conversationId) return false;
+  const sockets = userSockets.get(userId.toString());
+  if (!sockets) return false;
+  for (const socketId of sockets) {
+    if (socketActiveChats.get(socketId) === conversationId.toString()) {
+      return true;
+    }
+  }
+  return false;
+};
+
+let ioInstance;
+
+const emitToUser = (userId, event, data) => {
+  if (!userId) return;
+  const sockets = userSockets.get(userId.toString());
+  if (!sockets) return;
+  sockets.forEach((socketId) => {
+    if (ioInstance) {
+      ioInstance.to(socketId).emit(event, data);
+    }
+  });
+};
+
 const socketHandler = (io) => {
+  ioInstance = io;
   // ─── Auth Middleware ──────────────────────────────────────────────────────
   io.use((socket, next) => {
     try {
@@ -37,23 +95,157 @@ const socketHandler = (io) => {
   });
 
   io.on('connection', async (socket) => {
+    let currentUserId = socket.userId?.toString();
     console.log(`[Socket] User connected: ${socket.userId} (${socket.id})`);
-    onlineUsers.set(socket.userId, socket.id);
+    if (currentUserId) {
+      setUserOnline(currentUserId, socket.id);
+    }
 
-    // Mark user online
-    try {
-      await User.findByIdAndUpdate(socket.userId, { isOnline: true });
-      // Notify friends that this user came online
-      const user = await User.findById(socket.userId).select('friends');
-      if (user?.friends) {
-        user.friends.forEach((friendId) => {
-          const friendSocketId = onlineUsers.get(friendId.toString());
-          if (friendSocketId) {
-            io.to(friendSocketId).emit('friend:online', { userId: socket.userId, username: socket.username });
-          }
+    //────────────────────────────────────────
+    // USER COMES ONLINE
+    //────────────────────────────────────────
+    socket.on('user:online', async ({ userId }) => {
+      const uid = userId?.toString() || socket.userId?.toString();
+      if (!uid) return;
+      currentUserId = uid;
+      console.log(`🟢 User online: ${currentUserId} (socket: ${socket.id})`);
+
+      setUserOnline(currentUserId, socket.id);
+
+      await User.findByIdAndUpdate(currentUserId, {
+        isOnline: true,
+        lastSeen: new Date(),
+      });
+
+      const user = await User.findById(currentUserId).select('friends');
+      user?.friends?.forEach(friendId => {
+        emitToUser(friendId.toString(), 'friend:status', {
+          userId: currentUserId,
+          isOnline: true,
+          lastSeen: new Date(),
         });
+      });
+
+      // Send missed notifications:
+      try {
+        const missed = await Notification.find({
+          userId: currentUserId,
+          read: false,
+        }).sort({ createdAt: -1 }).limit(20);
+
+        if (missed.length > 0) {
+          console.log(`📬 Sending ${missed.length} missed notifications to ${currentUserId}`);
+
+          missed.forEach(notif => {
+            if (notif.type === 'friend_request') {
+              socket.emit('friend:request:received', {
+                fromUser: notif.fromUser,
+                timestamp: notif.createdAt,
+              });
+            }
+            if (notif.type === 'friend_request_accepted') {
+              socket.emit('friend:request:accepted', {
+                acceptedBy: notif.fromUser,
+                timestamp: notif.createdAt,
+              });
+            }
+          });
+
+          // Mark all as read:
+          await Notification.updateMany(
+            { userId: currentUserId, read: false },
+            { $set: { read: true } }
+          );
+        }
+      } catch (err) {
+        console.error('[Socket] failed loading missed notifications:', err);
       }
-    } catch {}
+    });
+
+    //────────────────────────────────────────
+    // USER GOES IDLE (tab not focused)
+    //────────────────────────────────────────
+    socket.on('user:idle', async ({ userId }) => {
+      const uid = userId?.toString() || socket.userId?.toString();
+      if (!uid) return;
+      console.log(`💤 User idle: ${uid}`);
+
+      const lastSeen = new Date();
+
+      await User.findByIdAndUpdate(uid, {
+        isOnline: false,
+        lastSeen,
+      });
+
+      const user = await User.findById(uid).select('friends');
+      user?.friends?.forEach(friendId => {
+        emitToUser(friendId.toString(), 'friend:status', {
+          userId: uid,
+          isOnline: false,
+          lastSeen,
+        });
+      });
+    });
+
+    //────────────────────────────────────────
+    // USER COMES BACK (tab focused again)
+    //────────────────────────────────────────
+    socket.on('user:active', async ({ userId }) => {
+      const uid = userId?.toString() || socket.userId?.toString();
+      if (!uid) return;
+      console.log(`🟢 User active again: ${uid}`);
+
+      await User.findByIdAndUpdate(uid, {
+        isOnline: true,
+        lastSeen: new Date(),
+      });
+
+      const user = await User.findById(uid).select('friends');
+      user?.friends?.forEach(friendId => {
+        emitToUser(friendId.toString(), 'friend:status', {
+          userId: uid,
+          isOnline: true,
+          lastSeen: new Date(),
+        });
+      });
+    });
+
+    //────────────────────────────────────────
+    // SEEN EVENTS
+    //────────────────────────────────────────
+    socket.on('chat:open', ({ conversationId }) => {
+      socketActiveChats.set(socket.id, conversationId);
+      console.log(`👁️ ${socket.userId} (socket ${socket.id}) opened chat: ${conversationId}`);
+    });
+
+    socket.on('chat:close', () => {
+      socketActiveChats.delete(socket.id);
+      console.log(`👁️ ${socket.userId} (socket ${socket.id}) closed chat`);
+    });
+
+    socket.on('messages:seen', async ({ conversationId, messageIds, seenBy, senderId }) => {
+      console.log(`👁️ Seen: ${messageIds.length} messages in ${conversationId}`);
+
+      await Message.updateMany(
+        {
+          _id: { $in: messageIds },
+          senderId: { $ne: seenBy },
+          status: { $ne: 'seen' },
+        },
+        {
+          $set: {
+            status: 'seen',
+            seenAt: new Date(),
+          }
+        }
+      );
+
+      emitToUser(senderId, 'messages:seen:confirmed', {
+        conversationId,
+        messageIds,
+        seenAt: new Date(),
+      });
+    });
 
     // ─── ANONYMOUS ROOM — Join (existing flow preserved) ─────────────────
     socket.on('join-room', async ({ roomCode }, callback) => {
@@ -84,7 +276,7 @@ const socketHandler = (io) => {
             username: u.username,
             displayName: u.displayName || u.username,
             avatar: u.avatar || '',
-            online: onlineUsers.has(u._id.toString()),
+            online: isUserOnline(u._id.toString()),
           })),
         });
       } catch (err) {
@@ -109,7 +301,7 @@ const socketHandler = (io) => {
           const dbRoom = await Room.findOne({ code: normalizedCode, isActive: true }).populate('users', 'username');
           if (dbRoom) {
             const users = dbRoom.users.map((u) => ({
-              socketId: onlineUsers.get(u._id.toString()) || '',
+              socketId: Array.from(userSockets.get(u._id.toString()) || [])[0] || '',
               username: u.username,
             }));
             room = { code, users, createdAt: dbRoom.createdAt, dbRoomId: dbRoom._id };
@@ -174,6 +366,13 @@ const socketHandler = (io) => {
         const isParticipant = dm.participants.map((p) => p.toString()).includes(socket.userId.toString());
         if (!isParticipant) return callback?.({ error: 'Access denied.' });
 
+        const partner = dm.participants.find((p) => p.toString() !== socket.userId.toString());
+        const receiverId = partner.toString();
+
+        // Check if receiver has this chat open RIGHT NOW on any tab:
+        const isChatOpen = isChatOpenForUser(receiverId, dmId);
+        const status = isChatOpen ? 'seen' : (isUserOnline(receiverId) ? 'delivered' : 'sent');
+
         const message = await Message.create({
           dmId,
           isDM: true,
@@ -183,6 +382,8 @@ const socketHandler = (io) => {
           cloudinaryId: cloudinaryId || null,
           replyTo: replyTo || null,
           expiresAt: null,
+          status,
+          seenAt: isChatOpen ? new Date() : null,
         });
 
         await message.populate('senderId', 'username displayName avatar');
@@ -190,24 +391,34 @@ const socketHandler = (io) => {
           await message.populate({ path: 'replyTo', populate: { path: 'senderId', select: 'username displayName' } });
         }
 
-        const partner = dm.participants.find((p) => p.toString() !== socket.userId.toString());
-
         // Update DM lastMessage and unread
         dm.lastMessage = { content: content.slice(0, 60), type, senderId: socket.userId, createdAt: new Date() };
-        const partnerUnread = dm.unreadCount.get(partner.toString()) || 0;
-        dm.unreadCount.set(partner.toString(), partnerUnread + 1);
+        if (!isChatOpen) {
+          const partnerUnread = dm.unreadCount.get(receiverId) || 0;
+          dm.unreadCount.set(receiverId, partnerUnread + 1);
+        } else {
+          dm.unreadCount.set(receiverId, 0);
+        }
         await dm.save();
 
         const payload = { ...message.toJSON(), dmId };
         io.to(`dm:${dmId}`).emit('dm:new-message', payload);
 
         // Also notify partner if they're not in the DM room via a notification event
-        const partnerSocketId = onlineUsers.get(partner.toString());
-        if (partnerSocketId) {
-          io.to(partnerSocketId).emit('dm:notification', {
+        if (!isChatOpen) {
+          emitToUser(receiverId, 'dm:notification', {
             dmId,
             message: payload,
             from: { id: socket.userId, username: socket.username },
+          });
+        }
+
+        // If seen immediately — tell sender too:
+        if (isChatOpen) {
+          emitToUser(socket.userId.toString(), 'messages:seen:confirmed', {
+            conversationId: dmId.toString(),
+            messageIds: [message._id.toString()],
+            seenAt: new Date(),
           });
         }
 
@@ -228,7 +439,7 @@ const socketHandler = (io) => {
         if (!isUserInRoom) return callback?.({ error: 'Access denied.' });
 
         const partner = room.users.find((u) => u.toString() !== socket.userId.toString());
-        const partnerOnline = partner ? onlineUsers.has(partner.toString()) : false;
+        const partnerOnline = partner ? isUserOnline(partner.toString()) : false;
         const initialStatus = partnerOnline ? 'delivered' : 'sent';
 
         const message = new Message({
@@ -444,118 +655,141 @@ const socketHandler = (io) => {
     });
 
     // ─── FRIEND REQUESTS ─────────────────────────────────────────────────
-    socket.on('friend:request', async ({ toUsername }) => {
+    socket.on('friend:request:send', async ({ fromUserId, toUserId, fromUser }) => {
       try {
-        const target = await User.findOne({ username: toUsername.toLowerCase() });
-        if (!target) return;
-        const targetSocketId = onlineUsers.get(target._id.toString());
-        if (targetSocketId) {
-          const sender = await User.findById(socket.userId).select('username displayName avatar');
-          io.to(targetSocketId).emit('friend:request:received', {
-            from: { id: sender._id, username: sender.username, displayName: sender.displayName, avatar: sender.avatar },
+        console.log(`📨 Friend request: ${fromUserId} → ${toUserId}`);
+        const toId = toUserId?.toString();
+        if (!toId) return;
+
+        const receiverOnline = isUserOnline(toId);
+        console.log('🟢 Receiver online?', receiverOnline);
+
+        if (receiverOnline) {
+          emitToUser(toId, 'friend:request:received', {
+            fromUser,
+            timestamp: new Date(),
           });
+          console.log('✅ friend:request:received emitted');
+        } else {
+          await Notification.create({
+            userId: toId,
+            type: 'friend_request',
+            fromUser,
+            read: false,
+            createdAt: new Date(),
+          });
+          console.log('💾 Saved notification for offline user');
         }
-      } catch (err) { console.error('[Socket] friend:request error:', err); }
+      } catch (err) {
+        console.error('[Socket] friend:request:send error:', err);
+      }
     });
 
-    socket.on('friend:accept', async ({ fromUserId }) => {
+    socket.on('friend:request:accept', async ({ fromUserId, toUserId, acceptingUser }) => {
       try {
-        const fromSocketId = onlineUsers.get(fromUserId);
-        if (fromSocketId) {
-          const accepter = await User.findById(socket.userId).select('username displayName avatar');
-          io.to(fromSocketId).emit('friend:accepted', {
-            by: { id: accepter._id, username: accepter.username, displayName: accepter.displayName, avatar: accepter.avatar },
+        console.log(`✅ Accept: ${fromUserId} accepted ${toUserId}'s request`);
+        const toId = toUserId?.toString();
+        if (!toId) return;
+
+        const receiverOnline = isUserOnline(toId);
+        console.log('🟢 Receiver online?', receiverOnline);
+
+        if (receiverOnline) {
+          emitToUser(toId, 'friend:request:accepted', {
+            acceptedBy: acceptingUser,
+            timestamp: new Date(),
           });
+          console.log('✅ friend:request:accepted emitted');
+        } else {
+          await Notification.create({
+            userId: toId,
+            type: 'friend_request_accepted',
+            fromUser: acceptingUser,
+            read: false,
+            createdAt: new Date(),
+          });
+          console.log('💾 Saved acceptance notification for offline user');
         }
-      } catch (err) { console.error('[Socket] friend:accept error:', err); }
+      } catch (err) {
+        console.error('[Socket] friend:request:accept error:', err);
+      }
     });
 
-    socket.on('friend:decline', ({ fromUserId }) => {
-      const fromSocketId = onlineUsers.get(fromUserId);
-      if (fromSocketId) io.to(fromSocketId).emit('friend:declined', { byUserId: socket.userId });
+    socket.on('friend:request:decline', ({ fromUserId, toUserId }) => {
+      const toId = toUserId?.toString();
+      if (toId && isUserOnline(toId)) {
+        emitToUser(toId, 'friend:request:declined', {
+          byUserId: fromUserId,
+        });
+      }
     });
 
     socket.on('friend:unfriend', ({ userId }) => {
-      const targetSocketId = onlineUsers.get(userId);
-      if (targetSocketId) io.to(targetSocketId).emit('friend:removed', { byUserId: socket.userId });
+      const toId = userId?.toString();
+      if (toId && isUserOnline(toId)) {
+        emitToUser(toId, 'friend:removed', {
+          byUserId: socket.userId,
+        });
+      }
     });
 
     // ─── FOLLOW / UNFOLLOW ──────────────────────────────────────────────
     socket.on('follow:new', async ({ targetUserId }) => {
       try {
-        const targetSocketId = onlineUsers.get(targetUserId);
-        if (targetSocketId) {
-          const follower = await User.findById(socket.userId).select('username displayName avatar');
-          io.to(targetSocketId).emit('follow:received', {
-            from: { id: follower._id, username: follower.username, displayName: follower.displayName, avatar: follower.avatar },
-          });
-        }
+        const follower = await User.findById(socket.userId).select('username displayName avatar');
+        emitToUser(targetUserId, 'follow:received', {
+          from: { id: follower._id, username: follower.username, displayName: follower.displayName, avatar: follower.avatar },
+        });
       } catch (err) { console.error('[Socket] follow:new error:', err); }
     });
 
     socket.on('follow:remove', ({ targetUserId }) => {
-      const targetSocketId = onlineUsers.get(targetUserId);
-      if (targetSocketId) io.to(targetSocketId).emit('follow:removed', { byUserId: socket.userId });
+      emitToUser(targetUserId, 'follow:removed', { byUserId: socket.userId });
     });
 
     // ─── VIDEO / AUDIO CALLS ─────────────────────────────────────────────
     socket.on('call:video:initiate', ({ toUserId, signal }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('call:video:incoming', {
-          fromUserId: socket.userId,
-          fromUsername: socket.username,
-          signal,
-        });
-      }
+      emitToUser(toUserId, 'call:video:incoming', {
+        fromUserId: socket.userId,
+        fromUsername: socket.username,
+        signal,
+      });
     });
 
     socket.on('call:video:accept', ({ toUserId, signal }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('call:video:accepted', { fromUserId: socket.userId, signal });
-      }
+      emitToUser(toUserId, 'call:video:accepted', { fromUserId: socket.userId, signal });
     });
 
     socket.on('call:video:reject', ({ toUserId }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) io.to(targetSocketId).emit('call:video:rejected', { fromUserId: socket.userId });
+      emitToUser(toUserId, 'call:video:rejected', { fromUserId: socket.userId });
     });
 
     socket.on('call:video:end', ({ toUserId, duration }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) io.to(targetSocketId).emit('call:video:ended', { fromUserId: socket.userId, duration });
+      emitToUser(toUserId, 'call:video:ended', { fromUserId: socket.userId, duration });
     });
 
     socket.on('call:audio:initiate', ({ toUserId, signal }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('call:audio:incoming', {
-          fromUserId: socket.userId,
-          fromUsername: socket.username,
-          signal,
-        });
-      }
+      emitToUser(toUserId, 'call:audio:incoming', {
+        fromUserId: socket.userId,
+        fromUsername: socket.username,
+        signal,
+      });
     });
 
     socket.on('call:audio:accept', ({ toUserId, signal }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) io.to(targetSocketId).emit('call:audio:accepted', { fromUserId: socket.userId, signal });
+      emitToUser(toUserId, 'call:audio:accepted', { fromUserId: socket.userId, signal });
     });
 
     socket.on('call:audio:reject', ({ toUserId }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) io.to(targetSocketId).emit('call:audio:rejected', { fromUserId: socket.userId });
+      emitToUser(toUserId, 'call:audio:rejected', { fromUserId: socket.userId });
     });
 
     socket.on('call:audio:end', ({ toUserId, duration }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) io.to(targetSocketId).emit('call:audio:ended', { fromUserId: socket.userId, duration });
+      emitToUser(toUserId, 'call:audio:ended', { fromUserId: socket.userId, duration });
     });
 
     socket.on('call:ice:candidate', ({ toUserId, candidate }) => {
-      const targetSocketId = onlineUsers.get(toUserId);
-      if (targetSocketId) io.to(targetSocketId).emit('call:ice:candidate', { candidate, fromUserId: socket.userId });
+      emitToUser(toUserId, 'call:ice:candidate', { candidate, fromUserId: socket.userId });
     });
 
     // ─── LIVE LOCATION ────────────────────────────────────────────────────
@@ -666,32 +900,51 @@ const socketHandler = (io) => {
 
     // ─── DISCONNECT ───────────────────────────────────────────────────────
     socket.on('disconnect', async () => {
-      console.log(`[Socket] User disconnected: ${socket.userId}`);
-      onlineUsers.delete(socket.userId);
+      if (!socket.userId) return;
+      const uid = socket.userId.toString();
+      console.log(`🔴 Socket disconnected: ${socket.id} (user: ${uid})`);
 
-      try {
-        await User.findByIdAndUpdate(socket.userId, { isOnline: false, lastSeen: new Date() });
-        const user = await User.findById(socket.userId).select('friends');
-        if (user?.friends) {
-          user.friends.forEach((friendId) => {
-            const friendSocketId = onlineUsers.get(friendId.toString());
-            if (friendSocketId) {
-              io.to(friendSocketId).emit('friend:offline', { userId: socket.userId });
-            }
+      socketActiveChats.delete(socket.id);
+      const wasLastTab = setUserOffline(uid, socket.id);
+
+      if (wasLastTab) {
+        console.log(`🔴 User fully offline: ${uid}`);
+        const lastSeen = new Date();
+
+        try {
+          await User.findByIdAndUpdate(uid, {
+            isOnline: false,
+            lastSeen,
           });
+
+          // Notify all friends:
+          const user = await User.findById(uid).select('friends');
+          if (user?.friends) {
+            user.friends.forEach((friendId) => {
+              emitToUser(friendId.toString(), 'friend:status', {
+                userId: uid,
+                isOnline: false,
+                lastSeen,
+              });
+            });
+          }
+        } catch (err) {
+          console.error('[Socket] disconnect DB error:', err);
         }
-      } catch {}
+      } else {
+        console.log(`🟡 Still has other tabs open: ${uid}`);
+      }
 
       if (socket.roomId) {
-        socket.to(socket.roomId).emit('user-offline', { userId: socket.userId });
+        socket.to(socket.roomId).emit('user-offline', { userId: uid });
         if (typingUsers.has(socket.roomId)) {
-          typingUsers.get(socket.roomId).delete(socket.userId);
-          socket.to(socket.roomId).emit('user-stop-typing', { userId: socket.userId });
+          typingUsers.get(socket.roomId).delete(uid);
+          socket.to(socket.roomId).emit('user-stop-typing', { userId: uid });
         }
       }
 
       if (socket.dmId) {
-        socket.to(`dm:${socket.dmId}`).emit('user-offline', { userId: socket.userId });
+        socket.to(`dm:${socket.dmId}`).emit('user-offline', { userId: uid });
       }
     });
   });

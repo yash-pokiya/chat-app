@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { Toaster } from 'react-hot-toast';
 import { AnimatePresence } from 'framer-motion';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { SocketProvider } from './context/SocketContext';
+import { SocketProvider, useSocket } from './context/SocketContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { CallProvider } from './context/CallContext';
 import { ConversationProvider } from './context/ConversationContext';
@@ -15,6 +15,9 @@ import Profile from './pages/Profile';
 import VideoCall from './pages/VideoCall';
 import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
+import useOnlineStatus from './hooks/useOnlineStatus';
+import useFriendStatus from './hooks/useFriendStatus';
+import useFriendRequests from './hooks/useFriendRequests.jsx';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -35,6 +38,13 @@ const AdminProtectedRoute = ({ children }) => {
 
 function AppRoutes() {
   const location = useLocation();
+  const { socket } = useSocket();
+  const { user } = useAuth();
+
+  useOnlineStatus({ socket, user });
+  useFriendStatus({ socket });
+  useFriendRequests({ socket, currentUser: user });
+
   return (
     <AnimatePresence mode="wait">
       <Routes location={location} key={location.pathname}>

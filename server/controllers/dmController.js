@@ -58,11 +58,27 @@ const getMessages = async (req, res) => {
       .populate('senderId', 'username displayName avatar')
       .populate({ path: 'replyTo', populate: { path: 'senderId', select: 'username displayName' } });
 
+    // Find first unread message (from partner, not yet seen by current user):
+    const chronologicalMessages = messages.slice().reverse();
+    const myId = req.user._id.toString();
+    let firstUnreadId = null;
+    let unreadCount = 0;
+
+    for (const msg of chronologicalMessages) {
+      const senderId = msg.senderId?._id?.toString() || msg.senderId?.toString();
+      if (senderId !== myId && msg.status !== 'seen' && msg.status !== 'read') {
+        if (!firstUnreadId) {
+          firstUnreadId = msg._id.toString();
+        }
+        unreadCount++;
+      }
+    }
+
     // Reset unread count
     dm.unreadCount.set(req.user._id.toString(), 0);
     await dm.save();
 
-    res.json({ success: true, messages: messages.reverse(), page, pinnedMessage });
+    res.json({ success: true, messages: chronologicalMessages, page, pinnedMessage, firstUnreadId, unreadCount });
   } catch (err) {
     console.error('[DM] getMessages error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });

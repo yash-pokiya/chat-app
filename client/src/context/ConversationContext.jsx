@@ -2,6 +2,8 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
 import api from '../utils/api';
+import useUserStore from '../store/userStore';
+import useFriendStore from '../store/friendStore';
 
 const ConversationContext = createContext(null);
 
@@ -16,7 +18,7 @@ const ConversationContext = createContext(null);
 export const ConversationProvider = ({ children }) => {
   const { socket } = useSocket();
   const { user } = useAuth();
-  const [friends, setFriends] = useState([]);
+  const { friends, setFriends, removeFriend } = useFriendStore();
   const [loading, setLoading] = useState(true);
 
   // ── Fetch friends list on login ──────────────────────────────────────
@@ -30,7 +32,16 @@ export const ConversationProvider = ({ children }) => {
     api
       .get('/friends/list')
       .then(({ data }) => {
-        if (data.success) setFriends(data.friends);
+        if (data.success) {
+          setFriends(data.friends);
+          data.friends.forEach((f) => {
+            useUserStore.getState().updateFriendStatus({
+              userId: f.id,
+              isOnline: f.isOnline,
+              lastSeen: f.lastSeen,
+            });
+          });
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -105,7 +116,16 @@ export const ConversationProvider = ({ children }) => {
   const refreshFriends = useCallback(async () => {
     try {
       const { data } = await api.get('/friends/list');
-      if (data.success) setFriends(data.friends);
+      if (data.success) {
+        setFriends(data.friends);
+        data.friends.forEach((f) => {
+          useUserStore.getState().updateFriendStatus({
+            userId: f.id,
+            isOnline: f.isOnline,
+            lastSeen: f.lastSeen,
+          });
+        });
+      }
     } catch {}
   }, []);
 
@@ -126,18 +146,16 @@ export const ConversationProvider = ({ children }) => {
     // When a friend is accepted, refresh to pick up the new entry:
     const onFriendAccepted = () => refreshFriends();
     const onFriendRemoved = ({ byUserId }) => {
-      setFriends((prev) =>
-        prev.filter((f) => f.id?.toString() !== byUserId?.toString())
-      );
+      removeFriend(byUserId);
     };
 
     socket.on('dm:notification', onDMNotification);
-    socket.on('friend:accepted', onFriendAccepted);
+    socket.on('friend:request:accepted', onFriendAccepted);
     socket.on('friend:removed', onFriendRemoved);
 
     return () => {
       socket.off('dm:notification', onDMNotification);
-      socket.off('friend:accepted', onFriendAccepted);
+      socket.off('friend:request:accepted', onFriendAccepted);
       socket.off('friend:removed', onFriendRemoved);
     };
   }, [socket, user, updateLastMessage, refreshFriends]);

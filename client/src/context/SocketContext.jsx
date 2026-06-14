@@ -33,6 +33,20 @@ export const SocketProvider = ({ children }) => {
     socketInstance.on('connect', () => {
       console.log('[Socket] Connected:', socketInstance.id);
       setConnected(true);
+      const userId = user._id || user.id;
+      if (userId) {
+        socketInstance.emit('user:online', { userId });
+        console.log('🟢 user:online emitted on connect');
+      }
+    });
+
+    socketInstance.io.on('reconnect', () => {
+      console.log('🔄 Socket reconnected');
+      const userId = user._id || user.id;
+      if (userId) {
+        socketInstance.emit('user:online', { userId });
+        console.log('🟢 user:online emitted on reconnect');
+      }
     });
 
     socketInstance.on('disconnect', (reason) => {

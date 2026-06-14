@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
@@ -22,6 +22,10 @@ import LocationBubble from '../components/LocationBubble';
 import BlurredMedia from '../components/BlurredMedia';
 import { ReplyBar, QuotedMessage } from '../components/ReplyPreview';
 import UploadingBubble from '../components/UploadingBubble';
+import UnreadDivider from '../components/UnreadDivider';
+import useSeenManager from '../hooks/useSeenManager';
+import { OnlineDot, StatusText } from '../components/OnlineStatus';
+import MessageTicks from '../components/MessageTicks';
 
 // Message formatting parser
 const parseFormatting = (text) => {
@@ -70,11 +74,17 @@ export default function DMChat() {
   const [contextMenu, setContextMenu] = useState(null);
   const [isTyping, setIsTyping] = useState(false);
   const [partnerTyping, setPartnerTyping] = useState(false);
+  const [firstUnreadId, setFirstUnreadId] = useState(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [initialScrollDone, setInitialScrollDone] = useState(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const messagesEndRef = useRef(null);
+  const containerRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const longPressRef = useRef(null);
+  const isFirstLoad = useRef(true);
 
   const location = useLocation({ socket, dmId });
 
@@ -86,6 +96,16 @@ export default function DMChat() {
 
   const { updateLastMessage, markAsRead } = useConversations();
 
+  // ✅ Manages seen for this specific conversation:
+  useSeenManager({
+    socket,
+    conversationId: dmId,
+    messages,
+    currentUser: user,
+    otherUserId: partner?.id || partner?._id,
+    setMessages,
+  });
+
   // Load DM thread
   useEffect(() => {
     const loadDM = async () => {
@@ -96,6 +116,11 @@ export default function DMChat() {
         setMessages(msgData.messages);
         if (msgData.pinnedMessage) {
           setPinnedMessage(msgData.pinnedMessage);
+        }
+        // Track first unread for scroll positioning:
+        if (msgData.firstUnreadId) {
+          setFirstUnreadId(msgData.firstUnreadId);
+          setUnreadCount(msgData.unreadCount || 0);
         }
 
         // Get DM info — we'll infer partner from messages or a separate call
@@ -236,10 +261,80 @@ export default function DMChat() {
     };
   }, [socket, dmId, user]);
 
-  // Auto-scroll
+  // ── Initial scroll: runs ONCE after messages load ──────────────
   useEffect(() => {
+    if (!isFirstLoad.current || loading || messages.length === 0) return;
+    isFirstLoad.current = false;
+
+    // Small delay to let DOM render before scrolling:
+    requestAnimationFrame(() => {
+      if (firstUnreadId) {
+        // Scroll to the unread divider instantly (no animation):
+        const dividerEl = document.getElementById('unread-divider');
+        if (dividerEl) {
+          dividerEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+        } else {
+          // Fallback: scroll to the first unread message:
+          const msgEl = document.getElementById(`msg-${firstUnreadId}`);
+          if (msgEl) msgEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+        }
+      } else {
+        // All read → scroll to bottom instantly:
+        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      }
+      setInitialScrollDone(true);
+    });
+  }, [messages, loading, firstUnreadId]);
+
+  // ── New message scroll: runs when a new message arrives AFTER initial load ──
+  const prevMessageCountRef = useRef(0);
+  useEffect(() => {
+    if (!initialScrollDone) return;
+    if (messages.length <= prevMessageCountRef.current) {
+      prevMessageCountRef.current = messages.length;
+      return;
+    }
+    prevMessageCountRef.current = messages.length;
+
+    const lastMsg = messages[messages.length - 1];
+    const lastSenderId = lastMsg?.senderId?._id || lastMsg?.senderId;
+    const isMyMessage = lastSenderId?.toString() === user?.id?.toString();
+
+    if (isMyMessage) {
+      // Own message → always scroll to bottom smoothly:
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+
+    // Partner message → only auto-scroll if near bottom:
+    const container = containerRef.current;
+    if (container) {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      if (distanceFromBottom < 150) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      } else {
+        setShowScrollBtn(true);
+      }
+    }
+  }, [messages, initialScrollDone, user]);
+
+  // ── Scroll container handler: hide "new messages" when near bottom ──
+  const handleScroll = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 100 && showScrollBtn) {
+      setShowScrollBtn(false);
+    }
+  }, [showScrollBtn]);
+
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    setShowScrollBtn(false);
+    // Clear unread divider when user scrolls down:
+    setFirstUnreadId(null);
+    setUnreadCount(0);
+  }, []);
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -491,11 +586,13 @@ export default function DMChat() {
           <Link to={`/profile/${partner.username}`} className="flex items-center gap-2.5 flex-1 min-w-0">
             <div className="relative">
               <Avatar user={partner} size={9} />
-              {partner.isOnline && <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-400 border-2 border-white rounded-full" />}
+              <OnlineDot userId={partner.id || partner._id} size="sm" className="absolute -bottom-0.5 -right-0.5" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="font-semibold text-gray-900 text-sm truncate">{partner.displayName || partner.username}</p>
-              <p className="text-xs text-gray-400">{partnerTyping ? '✍️ typing...' : partner.isOnline ? 'Online' : 'Offline'}</p>
+              <p className="text-xs text-gray-400">
+                {partnerTyping ? '✍️ typing...' : <StatusText userId={partner.id || partner._id} />}
+              </p>
             </div>
           </Link>
         )}
@@ -533,14 +630,16 @@ export default function DMChat() {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
-        {messages.map((msg) => {
+      <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
+        {messages.map((msg, idx) => {
           const mine = isMine(msg);
+          const showDivider = firstUnreadId && msg._id === firstUnreadId;
           return (
+            <React.Fragment key={msg._id}>
+            {showDivider && <UnreadDivider count={unreadCount} />}
             <motion.div
               id={`msg-${msg._id}`}
-              key={msg._id}
-              initial={{ opacity: 0, y: 10 }}
+              initial={initialScrollDone ? { opacity: 0, y: 10 } : false}
               animate={{ opacity: 1, y: 0 }}
               className={`flex gap-2 ${mine ? 'justify-end' : 'justify-start'} msg-in`}
               onContextMenu={(e) => { e.preventDefault(); handleLongPress(msg, e); }}
@@ -639,9 +738,12 @@ export default function DMChat() {
                 </div>
 
                 {/* Timestamp */}
-                <span className="text-xs text-gray-300 px-1">
-                  {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
+                <div className="flex items-center gap-1 px-1">
+                  <span className="text-xs text-gray-300">
+                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {mine && <MessageTicks status={msg.status} />}
+                </div>
 
                 {/* Reactions display */}
                 {msg.reactions && msg.reactions.length > 0 && (
@@ -676,6 +778,7 @@ export default function DMChat() {
 
               {mine && <Avatar user={user} size={8} className="mt-auto mb-1" />}
             </motion.div>
+            </React.Fragment>
           );
         })}
 
@@ -718,6 +821,16 @@ export default function DMChat() {
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Floating "New messages" button */}
+      {showScrollBtn && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-28 left-1/2 -translate-x-1/2 z-30 px-4 py-2 bg-violet-500 text-white text-xs font-semibold rounded-full shadow-lg hover:bg-violet-600 active:scale-95 transition-all flex items-center gap-1.5 animate-bounce"
+        >
+          ↓ New messages
+        </button>
+      )}
 
       {/* Reply bar */}
       <AnimatePresence>

@@ -3,68 +3,27 @@ import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
+import useFriendStore from '../store/friendStore';
 
 const NotificationContext = createContext(null);
 
 export const NotificationProvider = ({ children }) => {
   const { socket } = useSocket();
   const { user, setUser } = useAuth();
-  const [pendingRequests, setPendingRequests] = useState([]);
+  const { pendingRequests, setPendingRequests, removePendingRequest } = useFriendStore();
   const [notifications, setNotifications] = useState([]);
 
   // Load initial pending requests
   useEffect(() => {
     if (!user) return;
     api.get('/friends/requests').then(({ data }) => {
-      if (data.success) setPendingRequests(data.requests);
+      if (data.success) setPendingRequests(data.requests || []);
     }).catch(() => {});
-  }, [user]);
+  }, [user, setPendingRequests]);
 
   // Socket listeners for real-time notifications
   useEffect(() => {
     if (!socket || !user) return;
-
-    const onFriendRequest = ({ from }) => {
-      setPendingRequests((prev) => {
-        const exists = prev.some((r) => r._id === from.id || r.id === from.id);
-        if (exists) return prev;
-        return [{ _id: from.id, ...from }, ...prev];
-      });
-      addNotification({
-        type: 'friend_request',
-        message: `@${from.username} sent you a friend request`,
-        from,
-      });
-      toast(`👋 @${from.username} wants to be your friend!`, {
-        icon: '🤝',
-        duration: 5000,
-      });
-    };
-
-    const onFriendAccepted = ({ by }) => {
-      addNotification({
-        type: 'friend_accepted',
-        message: `@${by.username} accepted your friend request`,
-        from: by,
-      });
-      toast.success(`🎉 @${by.username} accepted your friend request!`);
-      // Update user's friends list
-      setUser((prev) => prev ? { ...prev, friends: [...(prev.friends || []), by] } : prev);
-    };
-
-    const onFriendDeclined = ({ byUserId }) => {
-      // Remove from sentRequests if we track them
-      toast(`A friend request was declined`, { icon: '😔', duration: 3000 });
-    };
-
-    const onFriendRemoved = ({ byUserId }) => {
-      // Remove from local friends list
-      setUser((prev) => prev ? {
-        ...prev,
-        friends: (prev.friends || []).filter((f) => (f._id || f.id || f) !== byUserId),
-      } : prev);
-      toast('A friend removed you from their list', { icon: '💔', duration: 3000 });
-    };
 
     const onFollowReceived = ({ from }) => {
       addNotification({
@@ -96,10 +55,6 @@ export const NotificationProvider = ({ children }) => {
       });
     };
 
-    socket.on('friend:request:received', onFriendRequest);
-    socket.on('friend:accepted', onFriendAccepted);
-    socket.on('friend:declined', onFriendDeclined);
-    socket.on('friend:removed', onFriendRemoved);
     socket.on('follow:received', onFollowReceived);
     socket.on('follow:removed', onFollowRemoved);
     socket.on('friend:online', onFriendOnline);
@@ -107,10 +62,6 @@ export const NotificationProvider = ({ children }) => {
     socket.on('dm:notification', onDMNotification);
 
     return () => {
-      socket.off('friend:request:received', onFriendRequest);
-      socket.off('friend:accepted', onFriendAccepted);
-      socket.off('friend:declined', onFriendDeclined);
-      socket.off('friend:removed', onFriendRemoved);
       socket.off('follow:received', onFollowReceived);
       socket.off('follow:removed', onFollowRemoved);
       socket.off('friend:online', onFriendOnline);
@@ -128,8 +79,8 @@ export const NotificationProvider = ({ children }) => {
   }, []);
 
   const removeFromPending = useCallback((userId) => {
-    setPendingRequests((prev) => prev.filter((r) => (r._id || r.id) !== userId));
-  }, []);
+    removePendingRequest(userId);
+  }, [removePendingRequest]);
 
   return (
     <NotificationContext.Provider value={{

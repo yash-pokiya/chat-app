@@ -65,14 +65,14 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
-app.use('/api/auth',    authRoutes);
-app.use('/api/rooms',   roomRoutes);
-app.use('/api/chat',    chatRoutes);
-app.use('/api/admin',   adminRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/rooms', roomRoutes);
+app.use('/api/chat', chatRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/friends', friendRoutes);
-app.use('/api/dm',      dmRoutes);
+app.use('/api/dm', dmRoutes);
 app.use('/api/profile', profileRoutes);
-app.use('/api/users',   profileRoutes); // alias for /api/users/search
+app.use('/api/users', profileRoutes); // alias for /api/users/search
 
 // Health check
 app.get('/api/health', (req, res) => {

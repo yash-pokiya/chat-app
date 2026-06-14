@@ -1,17 +1,52 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { UserPlus, MessageCircle, Check, UserCheck, Clock } from 'lucide-react';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 import { useSocket } from '../context/SocketContext';
+import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { OnlineDot } from './OnlineStatus';
+import useFriendStore from '../store/friendStore';
 
 export default function FriendCard({ user, onRelationshipChange }) {
   const { socket } = useSocket();
+  const { user: me } = useAuth();
   const navigate = useNavigate();
   const [relationship, setRelationship] = useState(user.relationship || 'STRANGER');
   const [loading, setLoading] = useState(false);
   const [isFollowing, setIsFollowing] = useState(user.isFollowingThem || false);
+  const friends = useFriendStore((state) => state.friends);
+  const pendingRequests = useFriendStore((state) => state.pendingRequests);
+  const sentRequests = useFriendStore((state) => state.sentRequests);
+  const { addFriend, removePendingRequest, addSentRequest } = useFriendStore();
+
+  useEffect(() => {
+    const targetUserId = (user.id || user._id)?.toString();
+    if (!targetUserId) return;
+
+    const isFriend = friends.some((f) => (f._id || f.id || f)?.toString() === targetUserId);
+    if (isFriend) {
+      setRelationship('FRIENDS');
+      return;
+    }
+
+    const isPendingReceived = pendingRequests.some((r) => (r._id || r.id || r)?.toString() === targetUserId);
+    if (isPendingReceived) {
+      setRelationship('PENDING_RECEIVED');
+      return;
+    }
+
+    const isPendingSent = sentRequests.some((r) => (r._id || r.id || r)?.toString() === targetUserId);
+    if (isPendingSent) {
+      setRelationship('PENDING_SENT');
+      return;
+    }
+
+    if (relationship === 'FRIENDS' || relationship === 'PENDING_SENT' || relationship === 'PENDING_RECEIVED') {
+      setRelationship('STRANGER');
+    }
+  }, [friends, pendingRequests, sentRequests, user.id, user._id, relationship]);
 
   const handleAddFriend = async () => {
     setLoading(true);
@@ -19,9 +54,50 @@ export default function FriendCard({ user, onRelationshipChange }) {
       const { data } = await api.post(`/friends/request/${user.username}`);
       if (data.success) {
         setRelationship('PENDING_SENT');
-        socket?.emit('friend:request', { toUsername: user.username });
+        const fromUser = {
+          _id: me._id || me.id,
+          username: me.username,
+          displayName: me.displayName,
+          avatar: me.avatar,
+        };
+        socket?.emit('friend:request:send', {
+          fromUserId: me._id || me.id,
+          toUserId: user.id || user._id,
+          fromUser,
+        });
+        addSentRequest(user);
         toast.success(`Friend request sent to @${user.username}!`);
         onRelationshipChange?.('PENDING_SENT');
+      }
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAcceptFriend = async () => {
+    setLoading(true);
+    const targetUserId = user.id || user._id;
+    try {
+      const { data } = await api.post(`/friends/accept/${targetUserId}`);
+      if (data.success) {
+        setRelationship('FRIENDS');
+        const acceptingUser = {
+          _id: me._id || me.id,
+          username: me.username,
+          displayName: me.displayName,
+          avatar: me.avatar,
+        };
+        socket?.emit('friend:request:accept', {
+          fromUserId: me._id || me.id,
+          toUserId: targetUserId,
+          acceptingUser,
+        });
+        addFriend(user);
+        removePendingRequest(targetUserId);
+        toast.success(`You and @${user.username} are now friends! 🎉`);
+        onRelationshipChange?.('FRIENDS');
       }
     } catch (err) {
       toast.error(err.message);
@@ -74,9 +150,7 @@ export default function FriendCard({ user, onRelationshipChange }) {
     >
       <div className="relative flex-shrink-0">
         {avatar}
-        {user.isOnline && (
-          <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" />
-        )}
+        <OnlineDot userId={user.id || user._id} size="md" defaultOnline={user.isOnline} className="absolute -bottom-0.5 -right-0.5" />
       </div>
 
       <div className="flex-1 min-w-0">
@@ -100,7 +174,7 @@ export default function FriendCard({ user, onRelationshipChange }) {
             <Clock size={12} /> Pending
           </div>
         ) : relationship === 'PENDING_RECEIVED' ? (
-          <button onClick={handleAddFriend} disabled={loading}
+          <button onClick={handleAcceptFriend} disabled={loading}
             className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-xl text-xs font-medium hover:bg-emerald-100 transition-colors">
             <Check size={12} /> Accept
           </button>
