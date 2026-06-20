@@ -21,8 +21,9 @@ export const SocketProvider = ({ children }) => {
 
     const token = localStorage.getItem('token');
 
-    // Connect to the backend (proxied via Vite)
-    const socketInstance = io('/', {
+    // Connect to the backend
+    const socketUrl = import.meta.env.VITE_BACKEND_URL || '/';
+    const socketInstance = io(socketUrl, {
       auth: { token },
       withCredentials: true,
       transports: ['websocket', 'polling'],
