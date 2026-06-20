@@ -12,7 +12,6 @@ import Chat from './pages/Chat';
 import Waiting from './pages/Waiting';
 import DMChat from './pages/DMChat';
 import Profile from './pages/Profile';
-import VideoCall from './pages/VideoCall';
 import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
 import useOnlineStatus from './hooks/useOnlineStatus';
@@ -53,7 +52,6 @@ function AppRoutes() {
         <Route path="/waiting/:roomCode" element={<ProtectedRoute><Waiting /></ProtectedRoute>} />
         <Route path="/dm/:dmId" element={<ProtectedRoute><DMChat /></ProtectedRoute>} />
         <Route path="/profile/:username" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-        <Route path="/call/video/:userId" element={<ProtectedRoute><VideoCall /></ProtectedRoute>} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminProtectedRoute><AdminDashboard /></AdminProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />

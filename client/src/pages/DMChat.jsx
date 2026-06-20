@@ -89,9 +89,8 @@ export default function DMChat() {
   const location = useLocation({ socket, dmId });
 
   const {
-    callState, callType, remoteUser: callRemoteUser,
-    initiateCall, acceptCall, rejectCall, endCall, formatDuration, callDuration,
-    incomingSignalRef,
+    callState,
+    initiateCall, formatDuration,
   } = useCall();
 
   const { updateLastMessage, markAsRead } = useConversations();
@@ -123,17 +122,28 @@ export default function DMChat() {
           setUnreadCount(msgData.unreadCount || 0);
         }
 
-        // Get DM info — we'll infer partner from messages or a separate call
-        // Fetch by getting DM via the partner's userId (we need to figure out partner from URL or messages)
-        // Alternative: use messages senderId to figure out partner
-        if (msgData.messages.length > 0) {
-          const firstMsg = msgData.messages[0];
-          // partner is the one who isn't me
-          const partnerData = firstMsg.senderId?._id?.toString() !== user.id
-            ? firstMsg.senderId
-            : null;
-          if (partnerData) {
-            setPartner({ id: partnerData._id, username: partnerData.username, displayName: partnerData.displayName, avatar: partnerData.avatar });
+        // Use dm participants to find the partner!
+        if (msgData.dm && msgData.dm.participants) {
+          const otherParticipant = msgData.dm.participants.find(p => p._id.toString() !== user.id);
+          if (otherParticipant) {
+            setPartner({
+              id: otherParticipant._id,
+              username: otherParticipant.username,
+              displayName: otherParticipant.displayName,
+              avatar: otherParticipant.avatar,
+              isOnline: otherParticipant.isOnline,
+            });
+          }
+        } else if (msgData.messages.length > 0) {
+          const partnerMsg = msgData.messages.find(m => m.senderId?._id?.toString() !== user.id);
+          if (partnerMsg && partnerMsg.senderId) {
+            const partnerData = partnerMsg.senderId;
+            setPartner({
+              id: partnerData._id,
+              username: partnerData.username,
+              displayName: partnerData.displayName,
+              avatar: partnerData.avatar,
+            });
           }
         }
       } catch (err) {
@@ -461,6 +471,8 @@ export default function DMChat() {
         onUploadProgress: (progressEvent) => {
           if (progressEvent.total) {
             const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+            const percent = pct;
+            console.log('Upload progress:', percent);
             setUploads((prev) => prev.map((u) =>
               u.id === uploadId ? { ...u, progress: pct } : u
             ));
@@ -605,12 +617,40 @@ export default function DMChat() {
           </button>
           {partner && (
             <>
-              <button onClick={() => { navigate(`/call/video/${partner.id}?type=audio&username=${partner.username}`); }}
-                className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors" title="Audio Call">
+              <button 
+                onClick={() => {
+                  if (!partner.id && !partner._id) {
+                    toast.error('User info not loaded yet')
+                    return
+                  }
+                  initiateCall({
+                    _id:         partner.id || partner._id,
+                    username:    partner.username,
+                    displayName: partner.displayName || partner.username,
+                    avatar:      partner.avatar,
+                  }, 'audio')
+                }}
+                className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors" 
+                title="Audio Call"
+              >
                 <Phone size={18} />
               </button>
-              <button onClick={() => navigate(`/call/video/${partner.id}?type=video&username=${partner.username}`)}
-                className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors" title="Video Call">
+              <button 
+                onClick={() => {
+                  if (!partner.id && !partner._id) {
+                    toast.error('User info not loaded yet')
+                    return
+                  }
+                  initiateCall({
+                    _id:         partner.id || partner._id,
+                    username:    partner.username,
+                    displayName: partner.displayName || partner.username,
+                    avatar:      partner.avatar,
+                  }, 'video')
+                }}
+                className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors" 
+                title="Video Call"
+              >
                 <Video size={18} />
               </button>
             </>

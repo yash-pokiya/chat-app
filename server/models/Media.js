@@ -55,7 +55,7 @@ const mediaSchema = new mongoose.Schema(
   { timestamps: false }
 );
 
-// TTL index
-mediaSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+// Standard index for chronological lookups and manual expiration queries
+mediaSchema.index({ expiresAt: 1 });
 
 module.exports = mongoose.model('Media', mediaSchema);

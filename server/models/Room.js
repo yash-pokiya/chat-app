@@ -5,7 +5,6 @@ const roomSchema = new mongoose.Schema(
     code: {
       type: String,
       required: true,
-      unique: true,
       uppercase: false,
       trim: true,
       lowercase: true,
@@ -36,6 +35,12 @@ const roomSchema = new mongoose.Schema(
 
 // TTL index – MongoDB auto-deletes docs after expiresAt
 roomSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+// Compound partial unique index to allow code reuse on inactive rooms
+roomSchema.index({ code: 1, isActive: 1 }, { 
+  unique: true, 
+  partialFilterExpression: { isActive: true } 
+});
 
 // Limit to 2 users
 roomSchema.path('users').validate(function (value) {

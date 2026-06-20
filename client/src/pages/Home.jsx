@@ -201,9 +201,9 @@ export default function Home() {
     >
       {/* Background blobs */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-brand-gradient opacity-[0.07] dark:opacity-[0.03] animate-blob" />
-        <div className="absolute top-1/3 -right-24 w-80 h-80 rounded-full bg-cyan-400 opacity-[0.07] dark:opacity-[0.03] animate-blob-delay" />
-        <div className="absolute -bottom-24 left-1/3 w-72 h-72 rounded-full bg-brand-400 opacity-[0.06] dark:opacity-[0.02] animate-blob-delay2" />
+        <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-gradient-to-br from-violet-400 to-indigo-400 opacity-[0.18] dark:opacity-[0.08] animate-blob" />
+        <div className="absolute top-1/3 -right-24 w-80 h-80 rounded-full bg-gradient-to-br from-cyan-400 to-blue-400 opacity-[0.18] dark:opacity-[0.08] animate-blob-delay" />
+        <div className="absolute -bottom-24 left-1/3 w-72 h-72 rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 opacity-[0.16] dark:opacity-[0.07] animate-blob-delay2" />
       </div>
 
       {/* Top bar */}
@@ -368,7 +368,7 @@ export default function Home() {
                     className="mb-4 space-y-2 overflow-hidden"
                   >
                     {searchResults.map((u) => (
-                      <div key={u.id} className="flex items-center gap-3 p-2.5 bg-gray-50 dark:bg-gray-800 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                      <Link key={u.id} to={`/profile/${u.username}`} className="flex items-center gap-3 p-2.5 bg-gray-50 dark:bg-gray-800 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                         <div className="relative flex-shrink-0">
                           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-400 to-cyan-400 flex items-center justify-center text-white text-sm font-bold">
                             {(u.displayName || u.username)[0].toUpperCase()}
@@ -379,10 +379,8 @@ export default function Home() {
                           <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{u.displayName || u.username}</p>
                           <p className="text-xs text-gray-400">@{u.username}{u.mutualFriendsCount > 0 ? ` · ${u.mutualFriendsCount} mutual` : ''}</p>
                         </div>
-                        <Link to={`/profile/${u.username}`}>
-                          <ChevronRight size={14} className="text-gray-400" />
-                        </Link>
-                      </div>
+                        <ChevronRight size={14} className="text-gray-400" />
+                      </Link>
                     ))}
                   </motion.div>
                 )}

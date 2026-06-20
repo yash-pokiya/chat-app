@@ -40,10 +40,10 @@ const getMessages = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 40;
 
-    const dm = await DM.findById(dmId);
+    const dm = await DM.findById(dmId).populate('participants', 'username displayName avatar isOnline lastSeen');
     if (!dm) return res.status(404).json({ success: false, message: 'DM not found.' });
 
-    const isParticipant = dm.participants.map((p) => p.toString()).includes(req.user._id.toString());
+    const isParticipant = dm.participants.map((p) => p._id.toString()).includes(req.user._id.toString());
     if (!isParticipant) return res.status(403).json({ success: false, message: 'Access denied.' });
 
     const messages = await Message.find({ dmId })
@@ -78,7 +78,7 @@ const getMessages = async (req, res) => {
     dm.unreadCount.set(req.user._id.toString(), 0);
     await dm.save();
 
-    res.json({ success: true, messages: chronologicalMessages, page, pinnedMessage, firstUnreadId, unreadCount });
+    res.json({ success: true, messages: chronologicalMessages, page, pinnedMessage, firstUnreadId, unreadCount, dm });
   } catch (err) {
     console.error('[DM] getMessages error:', err);
     res.status(500).json({ success: false, message: 'Server error.' });

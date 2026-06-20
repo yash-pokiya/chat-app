@@ -1,26 +1,20 @@
 const jwt = require('jsonwebtoken');
-const Room = require('../models/Room');
-const Message = require('../models/Message');
-const DM = require('../models/DM');
-const Notepad = require('../models/Notepad');
-const User = require('../models/User');
-const Notification = require('../models/Notification');
+const Room = require('../../models/Room');
+const Message = require('../../models/Message');
+const DM = require('../../models/DM');
+const Notepad = require('../../models/Notepad');
+const User = require('../../models/User');
+const Notification = require('../../models/Notification');
+const logger = require('../config/logger');
 
-// Track ALL sockets per user (multi-tab support)
+// Global maps for WebRTC sessions and timers
 const userSockets = new Map();
-// Track which conversation each socket is currently viewing:
 const socketActiveChats = new Map();
-// Track socket-to-socket active call pairs:
 const activeCallPairs = new Map();
-
-// Track typing per room/dm: { roomId: Set<userId> }
 const typingUsers = new Map();
-// Track active anonymous rooms: { roomCode: { code, users, createdAt, dbRoomId } }
 const activeRooms = new Map();
-// Track active shared timers: { roomCode: { seconds, totalSeconds, interval, isRunning } }
 const activeTimers = new Map();
 
-// Helper functions for multi-tab support
 const setUserOnline = (userId, socketId) => {
   if (!userId) return;
   const uid = userId.toString();
@@ -37,9 +31,9 @@ const setUserOffline = (userId, socketId) => {
   userSockets.get(uid).delete(socketId);
   if (userSockets.get(uid).size === 0) {
     userSockets.delete(uid);
-    return true; // truly offline now
+    return true; // user is fully offline (all tabs closed)
   }
-  return false; // still has other tabs open
+  return false;
 };
 
 const isUserOnline = (userId) => {
@@ -75,42 +69,54 @@ const emitToUser = (userId, event, data) => {
 
 const socketHandler = (io) => {
   ioInstance = io;
-  // ─── Auth Middleware ──────────────────────────────────────────────────────
+
+  // Asynchronous Handshake Authentication Middleware
   io.use((socket, next) => {
     try {
-      const token =
-        socket.handshake.auth?.token ||
-        socket.handshake.headers?.cookie
-          ?.split('; ')
-          .find((c) => c.startsWith('token='))
-          ?.split('=')[1];
+      let token = socket.handshake.auth?.token;
+      
+      if (!token && socket.handshake.headers?.cookie) {
+        const rawCookie = socket.handshake.headers.cookie;
+        const parsedToken = rawCookie.split('; ').find(row => row.startsWith('token='));
+        if (parsedToken) {
+          token = parsedToken.split('=')[1];
+        }
+      }
 
-      if (!token) return next(new Error('Authentication required.'));
+      if (!token) {
+        return next(new Error('Authentication required.'));
+      }
 
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      socket.userId = decoded.id;
-      socket.username = decoded.username;
-      next();
+      // Asynchronous JWT validation to prevent blocking the event loop
+      jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+          logger.error('[Socket Auth] Token verification failed:', err);
+          return next(new Error('Invalid token.'));
+        }
+        socket.userId = decoded.id;
+        socket.username = decoded.username;
+        next();
+      });
     } catch (err) {
-      next(new Error('Invalid token.'));
+      logger.error('[Socket Auth] Handshake parsing error:', err);
+      next(new Error('Authentication failed.'));
     }
   });
 
   io.on('connection', async (socket) => {
     let currentUserId = socket.userId?.toString();
-    console.log(`[Socket] User connected: ${socket.userId} (${socket.id})`);
+    logger.info(`[Socket] User connected: ${socket.userId} (${socket.id})`);
+    
     if (currentUserId) {
       setUserOnline(currentUserId, socket.id);
     }
 
-    //────────────────────────────────────────
-    // USER COMES ONLINE
-    //────────────────────────────────────────
+    // ─── USER ONLINE ──────────────────────────────────────────────────────
     socket.on('user:online', async ({ userId }) => {
       const uid = userId?.toString() || socket.userId?.toString();
       if (!uid) return;
       currentUserId = uid;
-      console.log(`🟢 User online: ${currentUserId} (socket: ${socket.id})`);
+      logger.info(`🟢 User online: ${currentUserId} (socket: ${socket.id})`);
 
       setUserOnline(currentUserId, socket.id);
 
@@ -119,7 +125,7 @@ const socketHandler = (io) => {
         lastSeen: new Date(),
       });
 
-      const user = await User.findById(currentUserId).select('friends');
+      const user = await User.findById(currentUserId).select('friends').lean();
       user?.friends?.forEach(friendId => {
         emitToUser(friendId.toString(), 'friend:status', {
           userId: currentUserId,
@@ -128,15 +134,15 @@ const socketHandler = (io) => {
         });
       });
 
-      // Send missed notifications:
+      // Send missed notifications
       try {
         const missed = await Notification.find({
           userId: currentUserId,
           read: false,
-        }).sort({ createdAt: -1 }).limit(20);
+        }).sort({ createdAt: -1 }).limit(20).lean();
 
         if (missed.length > 0) {
-          console.log(`📬 Sending ${missed.length} missed notifications to ${currentUserId}`);
+          logger.info(`📬 Sending ${missed.length} missed notifications to ${currentUserId}`);
 
           missed.forEach(notif => {
             if (notif.type === 'friend_request') {
@@ -153,24 +159,21 @@ const socketHandler = (io) => {
             }
           });
 
-          // Mark all as read:
           await Notification.updateMany(
             { userId: currentUserId, read: false },
             { $set: { read: true } }
           );
         }
       } catch (err) {
-        console.error('[Socket] failed loading missed notifications:', err);
+        logger.error('[Socket] failed loading missed notifications:', err);
       }
     });
 
-    //────────────────────────────────────────
-    // USER GOES IDLE (tab not focused)
-    //────────────────────────────────────────
+    // ─── USER IDLE ────────────────────────────────────────────────────────
     socket.on('user:idle', async ({ userId }) => {
       const uid = userId?.toString() || socket.userId?.toString();
       if (!uid) return;
-      console.log(`💤 User idle: ${uid}`);
+      logger.info(`💤 User idle: ${uid}`);
 
       const lastSeen = new Date();
 
@@ -179,7 +182,7 @@ const socketHandler = (io) => {
         lastSeen,
       });
 
-      const user = await User.findById(uid).select('friends');
+      const user = await User.findById(uid).select('friends').lean();
       user?.friends?.forEach(friendId => {
         emitToUser(friendId.toString(), 'friend:status', {
           userId: uid,
@@ -189,20 +192,18 @@ const socketHandler = (io) => {
       });
     });
 
-    //────────────────────────────────────────
-    // USER COMES BACK (tab focused again)
-    //────────────────────────────────────────
+    // ─── USER ACTIVE ──────────────────────────────────────────────────────
     socket.on('user:active', async ({ userId }) => {
       const uid = userId?.toString() || socket.userId?.toString();
       if (!uid) return;
-      console.log(`🟢 User active again: ${uid}`);
+      logger.info(`🟢 User active again: ${uid}`);
 
       await User.findByIdAndUpdate(uid, {
         isOnline: true,
         lastSeen: new Date(),
       });
 
-      const user = await User.findById(uid).select('friends');
+      const user = await User.findById(uid).select('friends').lean();
       user?.friends?.forEach(friendId => {
         emitToUser(friendId.toString(), 'friend:status', {
           userId: uid,
@@ -212,21 +213,19 @@ const socketHandler = (io) => {
       });
     });
 
-    //────────────────────────────────────────
-    // SEEN EVENTS
-    //────────────────────────────────────────
+    // ─── SEEN EVENTS ──────────────────────────────────────────────────────
     socket.on('chat:open', ({ conversationId }) => {
       socketActiveChats.set(socket.id, conversationId);
-      console.log(`👁️ ${socket.userId} (socket ${socket.id}) opened chat: ${conversationId}`);
+      logger.info(`👁️ ${socket.userId} (socket ${socket.id}) opened chat: ${conversationId}`);
     });
 
     socket.on('chat:close', () => {
       socketActiveChats.delete(socket.id);
-      console.log(`👁️ ${socket.userId} (socket ${socket.id}) closed chat`);
+      logger.info(`👁️ ${socket.userId} (socket ${socket.id}) closed chat`);
     });
 
     socket.on('messages:seen', async ({ conversationId, messageIds, seenBy, senderId }) => {
-      console.log(`👁️ Seen: ${messageIds.length} messages in ${conversationId}`);
+      logger.info(`👁️ Seen: ${messageIds.length} messages in ${conversationId}`);
 
       await Message.updateMany(
         {
@@ -249,11 +248,13 @@ const socketHandler = (io) => {
       });
     });
 
-    // ─── ANONYMOUS ROOM — Join (existing flow preserved) ─────────────────
+    // ─── JOIN ROOM ────────────────────────────────────────────────────────
     socket.on('join-room', async ({ roomCode }, callback) => {
       try {
         const normalizedCode = roomCode?.trim().toLowerCase();
-        const room = await Room.findOne({ code: normalizedCode, isActive: true }).populate('users', 'username displayName avatar');
+        const room = await Room.findOne({ code: normalizedCode, isActive: true })
+          .populate('users', 'username displayName avatar')
+          .lean();
 
         if (!room) return callback?.({ error: 'Room not found.' });
 
@@ -269,7 +270,6 @@ const socketHandler = (io) => {
           username: socket.username,
         });
 
-        const partner = room.users.find((u) => u._id.toString() !== socket.userId.toString());
         callback?.({
           success: true,
           roomId: room._id,
@@ -282,12 +282,12 @@ const socketHandler = (io) => {
           })),
         });
       } catch (err) {
-        console.error('[Socket] join-room error:', err);
+        logger.error('[Socket] join-room error:', err);
         callback?.({ error: 'Server error joining room.' });
       }
     });
 
-    // ─── ANONYMOUS ROOM — Room code flow ─────────────────────────────────
+    // ─── ROOM CODE FLOW ───────────────────────────────────────────────────
     socket.on('joinRoom', async ({ roomCode, username }) => {
       try {
         if (!roomCode || roomCode.trim().length !== 4) {
@@ -300,7 +300,7 @@ const socketHandler = (io) => {
         let room = activeRooms.get(code);
 
         if (!room) {
-          const dbRoom = await Room.findOne({ code: normalizedCode, isActive: true }).populate('users', 'username');
+          const dbRoom = await Room.findOne({ code: normalizedCode, isActive: true }).populate('users', 'username').lean();
           if (dbRoom) {
             const users = dbRoom.users.map((u) => ({
               socketId: Array.from(userSockets.get(u._id.toString()) || [])[0] || '',
@@ -348,18 +348,18 @@ const socketHandler = (io) => {
           }
         }
       } catch (err) {
-        console.error('[Socket] joinRoom error:', err);
+        logger.error('[Socket] joinRoom error:', err);
         socket.emit('room:full', { message: 'Server error joining room.' });
       }
     });
 
-    // ─── DM — Join DM room ───────────────────────────────────────────────
+    // ─── JOIN DM ROOM ─────────────────────────────────────────────────────
     socket.on('dm:join', ({ dmId }) => {
       socket.join(`dm:${dmId}`);
       socket.dmId = dmId;
     });
 
-    // ─── DM — Send message ───────────────────────────────────────────────
+    // ─── SEND DM MESSAGE ──────────────────────────────────────────────────
     socket.on('dm:send-message', async ({ dmId, content, type = 'text', replyTo, cloudinaryId, expiresIn }, callback) => {
       try {
         const dm = await DM.findById(dmId);
@@ -371,11 +371,9 @@ const socketHandler = (io) => {
         const partner = dm.participants.find((p) => p.toString() !== socket.userId.toString());
         const receiverId = partner.toString();
 
-        // Check if receiver has this chat open RIGHT NOW on any tab:
         const isChatOpen = isChatOpenForUser(receiverId, dmId);
         const status = isChatOpen ? 'seen' : (isUserOnline(receiverId) ? 'delivered' : 'sent');
 
-        // Compute expiresAt for auto-delete images
         let computedExpiresAt = null;
         if (expiresIn && expiresIn > 0) {
           computedExpiresAt = new Date(Date.now() + expiresIn);
@@ -399,9 +397,9 @@ const socketHandler = (io) => {
           await message.populate({ path: 'replyTo', populate: { path: 'senderId', select: 'username displayName' } });
         }
 
-        // Update DM lastMessage and unread
         const previewContent = type === 'image' ? '📷 Photo' : (content || '').slice(0, 60);
         dm.lastMessage = { content: previewContent, type, senderId: socket.userId, createdAt: new Date() };
+        
         if (!isChatOpen) {
           const partnerUnread = dm.unreadCount.get(receiverId) || 0;
           dm.unreadCount.set(receiverId, partnerUnread + 1);
@@ -413,7 +411,6 @@ const socketHandler = (io) => {
         const payload = { ...message.toJSON(), dmId };
         io.to(`dm:${dmId}`).emit('dm:new-message', payload);
 
-        // Also notify partner if they're not in the DM room via a notification event
         if (!isChatOpen) {
           emitToUser(receiverId, 'dm:notification', {
             dmId,
@@ -422,7 +419,6 @@ const socketHandler = (io) => {
           });
         }
 
-        // If seen immediately — tell sender too:
         if (isChatOpen) {
           emitToUser(socket.userId.toString(), 'messages:seen:confirmed', {
             conversationId: dmId.toString(),
@@ -433,15 +429,15 @@ const socketHandler = (io) => {
 
         callback?.({ success: true, message: payload });
       } catch (err) {
-        console.error('[Socket] dm:send-message error:', err);
+        logger.error('[Socket] dm:send-message error:', err);
         callback?.({ error: 'Failed to send DM.' });
       }
     });
 
-    // ─── ANONYMOUS ROOM — Send message ───────────────────────────────────
+    // ─── SEND GROUP MESSAGE ────────────────────────────────────────────────
     socket.on('send-message', async ({ roomId, content, type = 'text', cloudinaryId, duration, replyTo, isSelfDestruct }, callback) => {
       try {
-        const room = await Room.findById(roomId);
+        const room = await Room.findById(roomId).lean();
         if (!room) return callback?.({ error: 'Room not found.' });
 
         const isUserInRoom = room.users.some((u) => u.toString() === socket.userId.toString());
@@ -463,6 +459,7 @@ const socketHandler = (io) => {
           isSelfDestruct: !!isSelfDestruct,
           destructsAt: isSelfDestruct ? new Date(Date.now() + 10 * 1000) : null,
         });
+
         await message.save();
         await message.populate('senderId', 'username displayName avatar');
         if (replyTo) {
@@ -486,7 +483,7 @@ const socketHandler = (io) => {
         io.to(roomId).emit('new-message', payload);
         callback?.({ success: true, message: payload });
       } catch (err) {
-        console.error('[Socket] send-message error:', err);
+        logger.error('[Socket] send-message error:', err);
         callback?.({ error: 'Failed to send message.' });
       }
     });
@@ -502,12 +499,9 @@ const socketHandler = (io) => {
         );
 
         if (existingIdx > -1) {
-          // Same emoji same user -> TOGGLE OFF (remove)
           message.reactions.splice(existingIdx, 1);
         } else {
-          // Remove any other reaction by same user first (one reaction per user like Telegram)
           message.reactions = message.reactions.filter((r) => r.userId !== userId);
-          // Add new reaction
           message.reactions.push({ emoji, userId });
         }
         await message.save();
@@ -519,7 +513,7 @@ const socketHandler = (io) => {
           io.to(roomCode).emit('message:reacted', reactionPayload);
         }
       } catch (err) {
-        console.error('[Socket] message:react error:', err);
+        logger.error('[Socket] message:react error:', err);
       }
     });
 
@@ -532,7 +526,7 @@ const socketHandler = (io) => {
           await message.save();
           io.to(message.roomId?.toString() || `dm:${message.dmId}`).emit('message:updated', { messageId, status: 'delivered' });
         }
-      } catch (err) { console.error('[Socket] message:delivered error:', err); }
+      } catch (err) { logger.error('[Socket] message:delivered error:', err); }
     });
 
     socket.on('message:read', async ({ messageId, roomCode, dmId }) => {
@@ -549,14 +543,14 @@ const socketHandler = (io) => {
             if (message.roomId) io.to(message.roomId.toString()).emit('message:updated', payload);
           }
         }
-      } catch (err) { console.error('[Socket] message:read error:', err); }
+      } catch (err) { logger.error('[Socket] message:read error:', err); }
     });
 
     // ─── SCREENSHOT ALERT ─────────────────────────────────────────────────
     socket.on('screenshot:taken', async ({ roomCode, username, method }) => {
       try {
         const mongoose = require('mongoose');
-        const room = await Room.findOne({ code: roomCode.toLowerCase() });
+        const room = await Room.findOne({ code: roomCode.toLowerCase() }).lean();
         const roomId = room ? room._id : socket.roomId;
 
         const alertMsg = new Message({
@@ -573,9 +567,9 @@ const socketHandler = (io) => {
         io.to(roomCode).emit('new-message', payload);
         io.to(roomCode).emit('message:new', payload);
 
-        const ScreenshotLog = require('../models/ScreenshotLog');
+        const ScreenshotLog = require('../../models/ScreenshotLog');
         await ScreenshotLog.create({ roomCode, username, timestamp: Date.now() });
-      } catch (err) { console.error('[Socket] screenshot:taken error:', err); }
+      } catch (err) { logger.error('[Socket] screenshot:taken error:', err); }
     });
 
     // ─── SELF DESTRUCT ────────────────────────────────────────────────────
@@ -583,15 +577,14 @@ const socketHandler = (io) => {
       try {
         await Message.findByIdAndDelete(messageId);
         io.to(roomCode).emit('message:destructed', { messageId });
-      } catch (err) { console.error('[Socket] message:destruct error:', err); }
+      } catch (err) { logger.error('[Socket] message:destruct error:', err); }
     });
 
     // ─── MESSAGE PIN ──────────────────────────────────────────────────────
     socket.on('message:pin', async ({ messageId, roomCode, dmId }) => {
       try {
-        // Unpin previous pinned message
         if (roomCode) {
-          const room = await Room.findOne({ code: roomCode.toLowerCase() });
+          const room = await Room.findOne({ code: roomCode.toLowerCase() }).lean();
           if (room) await Message.updateMany({ roomId: room._id, isPinned: true }, { isPinned: false, pinnedAt: null });
         } else if (dmId) {
           await Message.updateMany({ dmId, isPinned: true }, { isPinned: false, pinnedAt: null });
@@ -601,7 +594,7 @@ const socketHandler = (io) => {
           messageId,
           { isPinned: true, pinnedAt: new Date() },
           { new: true }
-        ).populate('senderId', 'username displayName');
+        ).populate('senderId', 'username displayName').lean();
 
         const payload = { message };
         if (dmId) {
@@ -609,42 +602,36 @@ const socketHandler = (io) => {
         } else {
           io.to(roomCode).emit('message:pinned', payload);
         }
-      } catch (err) { console.error('[Socket] message:pin error:', err); }
+      } catch (err) { logger.error('[Socket] message:pin error:', err); }
     });
 
     socket.on('message:unpin', async ({ roomCode, dmId }) => {
       try {
         if (roomCode) {
-          const room = await Room.findOne({ code: roomCode.toLowerCase() });
+          const room = await Room.findOne({ code: roomCode.toLowerCase() }).lean();
           if (room) await Message.updateMany({ roomId: room._id, isPinned: true }, { isPinned: false, pinnedAt: null });
           io.to(roomCode).emit('message:unpinned');
         } else if (dmId) {
           await Message.updateMany({ dmId, isPinned: true }, { isPinned: false, pinnedAt: null });
           io.to(`dm:${dmId}`).emit('message:unpinned');
         }
-      } catch (err) { console.error('[Socket] message:unpin error:', err); }
+      } catch (err) { logger.error('[Socket] message:unpin error:', err); }
     });
 
     // ─── LOCATION SHARING ──────────────────────────────────────────────────
     socket.on('location:start', ({ roomCode, dmId, coords }) => {
-      const target = dmId ? `dm:${dmId}` : roomCode?.toUpperCase();
-      if (target) {
-        socket.to(target).emit('location:started', { userId: socket.userId, coords });
-      }
+      const target = dmId ? `dm:${dmId}` : roomCode;
+      socket.to(target).emit('location:started', { userId: socket.userId, username: socket.username, coords });
     });
 
     socket.on('location:update', ({ roomCode, dmId, coords }) => {
-      const target = dmId ? `dm:${dmId}` : roomCode?.toUpperCase();
-      if (target) {
-        socket.to(target).emit('location:updated', { userId: socket.userId, coords });
-      }
+      const target = dmId ? `dm:${dmId}` : roomCode;
+      socket.to(target).emit('location:updated', { userId: socket.userId, coords });
     });
 
     socket.on('location:stop', ({ roomCode, dmId }) => {
-      const target = dmId ? `dm:${dmId}` : roomCode?.toUpperCase();
-      if (target) {
-        socket.to(target).emit('location:stopped', { userId: socket.userId });
-      }
+      const target = dmId ? `dm:${dmId}` : roomCode;
+      socket.to(target).emit('location:stopped', { userId: socket.userId });
     });
 
     // ─── TYPING ───────────────────────────────────────────────────────────
@@ -666,19 +653,16 @@ const socketHandler = (io) => {
     // ─── FRIEND REQUESTS ─────────────────────────────────────────────────
     socket.on('friend:request:send', async ({ fromUserId, toUserId, fromUser }) => {
       try {
-        console.log(`📨 Friend request: ${fromUserId} → ${toUserId}`);
         const toId = toUserId?.toString();
         if (!toId) return;
 
         const receiverOnline = isUserOnline(toId);
-        console.log('🟢 Receiver online?', receiverOnline);
 
         if (receiverOnline) {
           emitToUser(toId, 'friend:request:received', {
             fromUser,
             timestamp: new Date(),
           });
-          console.log('✅ friend:request:received emitted');
         } else {
           await Notification.create({
             userId: toId,
@@ -687,28 +671,24 @@ const socketHandler = (io) => {
             read: false,
             createdAt: new Date(),
           });
-          console.log('💾 Saved notification for offline user');
         }
       } catch (err) {
-        console.error('[Socket] friend:request:send error:', err);
+        logger.error('[Socket] friend:request:send error:', err);
       }
     });
 
     socket.on('friend:request:accept', async ({ fromUserId, toUserId, acceptingUser }) => {
       try {
-        console.log(`✅ Accept: ${fromUserId} accepted ${toUserId}'s request`);
         const toId = toUserId?.toString();
         if (!toId) return;
 
         const receiverOnline = isUserOnline(toId);
-        console.log('🟢 Receiver online?', receiverOnline);
 
         if (receiverOnline) {
           emitToUser(toId, 'friend:request:accepted', {
             acceptedBy: acceptingUser,
             timestamp: new Date(),
           });
-          console.log('✅ friend:request:accepted emitted');
         } else {
           await Notification.create({
             userId: toId,
@@ -717,10 +697,9 @@ const socketHandler = (io) => {
             read: false,
             createdAt: new Date(),
           });
-          console.log('💾 Saved acceptance notification for offline user');
         }
       } catch (err) {
-        console.error('[Socket] friend:request:accept error:', err);
+        logger.error('[Socket] friend:request:accept error:', err);
       }
     });
 
@@ -745,18 +724,18 @@ const socketHandler = (io) => {
     // ─── FOLLOW / UNFOLLOW ──────────────────────────────────────────────
     socket.on('follow:new', async ({ targetUserId }) => {
       try {
-        const follower = await User.findById(socket.userId).select('username displayName avatar');
+        const follower = await User.findById(socket.userId).select('username displayName avatar').lean();
         emitToUser(targetUserId, 'follow:received', {
           from: { id: follower._id, username: follower.username, displayName: follower.displayName, avatar: follower.avatar },
         });
-      } catch (err) { console.error('[Socket] follow:new error:', err); }
+      } catch (err) { logger.error('[Socket] follow:new error:', err); }
     });
 
     socket.on('follow:remove', ({ targetUserId }) => {
       emitToUser(targetUserId, 'follow:removed', { byUserId: socket.userId });
     });
 
-    // ─── VIDEO / AUDIO CALLS (Unified, trickle-ICE) ────────────────────
+    // ─── VIDEO / AUDIO CALLS ( trickle-ICE) ────────────────────
     const getTargetSockets = (userId) => userSockets.get(userId?.toString());
 
     socket.on('call:initiate', ({ toUserId, fromUser, signal, callType }) => {
@@ -798,7 +777,7 @@ const socketHandler = (io) => {
       activeCallPairs.delete(socket.id);
     });
 
-    // ─── CALL LOG — Save call history as a DM message ────────────────────
+    // ─── CALL LOG — Save call history ────────────────────
     socket.on('call:save-log', async ({ dmId, callType, status, duration, callerId }) => {
       try {
         if (!dmId) return;
@@ -818,7 +797,6 @@ const socketHandler = (io) => {
           expiresAt: null,
         });
 
-        // Update DM lastMessage
         const statusText = status === 'completed' ? `${callType === 'video' ? '📹' : '📞'} Call` : `${callType === 'video' ? '📹' : '📞'} ${status}`;
         dm.lastMessage = { content: statusText, type: 'call_log', senderId: callerId || socket.userId, createdAt: new Date() };
         await dm.save();
@@ -826,34 +804,16 @@ const socketHandler = (io) => {
         const payload = { ...message.toJSON(), dmId };
         io.to(`dm:${dmId}`).emit('dm:new-message', payload);
       } catch (err) {
-        console.error('[Socket] call:save-log error:', err);
+        logger.error('[Socket] call:save-log error:', err);
       }
-    });
-
-    // ─── LIVE LOCATION ────────────────────────────────────────────────────
-    socket.on('location:start', ({ roomCode, dmId, coords }) => {
-      const target = dmId ? `dm:${dmId}` : roomCode;
-      socket.to(target).emit('location:started', { userId: socket.userId, username: socket.username, coords });
-    });
-
-    socket.on('location:update', ({ roomCode, dmId, coords }) => {
-      const target = dmId ? `dm:${dmId}` : roomCode;
-      socket.to(target).emit('location:updated', { userId: socket.userId, coords });
-    });
-
-    socket.on('location:stop', ({ roomCode, dmId }) => {
-      const target = dmId ? `dm:${dmId}` : roomCode;
-      socket.to(target).emit('location:stopped', { userId: socket.userId });
     });
 
     // ─── SHARED NOTEPAD ───────────────────────────────────────────────────
     const notepadDebounces = new Map();
 
     socket.on('notepad:update', ({ roomCode, content }) => {
-      // Relay to partner immediately
       socket.to(roomCode).emit('notepad:updated', { content, username: socket.username });
 
-      // Debounce DB save by 2s
       if (notepadDebounces.has(roomCode)) clearTimeout(notepadDebounces.get(roomCode));
       notepadDebounces.set(roomCode, setTimeout(async () => {
         try {
@@ -862,13 +822,13 @@ const socketHandler = (io) => {
             { content, lastEditBy: socket.username, updatedAt: new Date() },
             { upsert: true, new: true }
           );
-        } catch (err) { console.error('[Socket] notepad save error:', err); }
+        } catch (err) { logger.error('[Socket] notepad save error:', err); }
       }, 2000));
     });
 
     socket.on('notepad:get', async ({ roomCode }, callback) => {
       try {
-        const notepad = await Notepad.findOne({ roomCode });
+        const notepad = await Notepad.findOne({ roomCode }).lean();
         callback?.({ content: notepad?.content || '', lastEditBy: notepad?.lastEditBy || '' });
       } catch { callback?.({ content: '', lastEditBy: '' }); }
     });
@@ -920,7 +880,25 @@ const socketHandler = (io) => {
       const target = dmId ? `dm:${dmId}` : roomCode;
       const timer = activeTimers.get(key);
       if (timer) {
-        timer.isRunning = !timer.isRunning;
+        if (timer.isRunning) {
+          // Pause the timer, clear the interval loop
+          clearInterval(timer.interval);
+          timer.interval = null;
+          timer.isRunning = false;
+        } else {
+          // Resume the timer, restart the interval loop
+          timer.isRunning = true;
+          timer.interval = setInterval(() => {
+            timer.seconds--;
+            io.to(target).emit('timer:tick', { seconds: timer.seconds, totalSeconds: timer.totalSeconds, isRunning: true });
+
+            if (timer.seconds <= 0) {
+              clearInterval(timer.interval);
+              activeTimers.delete(key);
+              io.to(target).emit('timer:ended');
+            }
+          }, 1000);
+        }
         io.to(target).emit('timer:tick', { seconds: timer.seconds, totalSeconds: timer.totalSeconds, isRunning: timer.isRunning });
       }
     });
@@ -936,15 +914,14 @@ const socketHandler = (io) => {
       io.to(target).emit('timer:cancelled');
     });
 
-    // ─── DISCONNECT ───────────────────────────────────────────────────────
+    // ─── DISCONNECT CLEANUPS (Leak fixes) ──────────────────────────────
     socket.on('disconnect', async () => {
       if (!socket.userId) return;
       const uid = socket.userId.toString();
-      console.log(`🔴 Socket disconnected: ${socket.id} (user: ${uid})`);
+      logger.info(`🔴 Socket disconnected: ${socket.id} (user: ${uid})`);
 
       socketActiveChats.delete(socket.id);
 
-      // If this user was in a call, notify their partner so their camera also turns off:
       const partnerSocketId = activeCallPairs.get(socket.id);
       if (partnerSocketId) {
         ioInstance.to(partnerSocketId).emit('call:ended');
@@ -955,7 +932,7 @@ const socketHandler = (io) => {
       const wasLastTab = setUserOffline(uid, socket.id);
 
       if (wasLastTab) {
-        console.log(`🔴 User fully offline: ${uid}`);
+        logger.info(`🔴 User fully offline: ${uid}`);
         const lastSeen = new Date();
 
         try {
@@ -964,8 +941,7 @@ const socketHandler = (io) => {
             lastSeen,
           });
 
-          // Notify all friends:
-          const user = await User.findById(uid).select('friends');
+          const user = await User.findById(uid).select('friends').lean();
           if (user?.friends) {
             user.friends.forEach((friendId) => {
               emitToUser(friendId.toString(), 'friend:status', {
@@ -976,10 +952,21 @@ const socketHandler = (io) => {
             });
           }
         } catch (err) {
-          console.error('[Socket] disconnect DB error:', err);
+          logger.error('[Socket] disconnect DB error:', err);
         }
-      } else {
-        console.log(`🟡 Still has other tabs open: ${uid}`);
+      }
+
+      // Cleanup user from activeRooms to prevent memory leak
+      if (socket.roomCode) {
+        const code = socket.roomCode.toUpperCase();
+        const room = activeRooms.get(code);
+        if (room) {
+          room.users = room.users.filter(u => u.socketId !== socket.id);
+          if (room.users.length === 0) {
+            activeRooms.delete(code);
+            logger.info(`Cleaned up activeRoom key: ${code}`);
+          }
+        }
       }
 
       if (socket.roomId) {

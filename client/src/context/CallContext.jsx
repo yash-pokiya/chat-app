@@ -1,8 +1,9 @@
 import { createContext, useContext } from 'react';
 import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
-import { useWebRTC } from '../hooks/useWebRTC';
+import useWebRTC from '../hooks/useWebRTC';
 import IncomingCall from '../components/IncomingCall';
+import ActiveCall from '../components/ActiveCall';
 
 const CallContext = createContext(null);
 
@@ -20,21 +21,25 @@ export const CallProvider = ({ children }) => {
     <CallContext.Provider value={webrtc}>
       {children}
 
-      {/* Global incoming call overlay — shows on any page */}
-      {webrtc.callState === 'incoming' && (
+      {webrtc.callState.status === 'incoming' && (
         <IncomingCall
-          caller={webrtc.remoteUser}
-          callType={webrtc.callType}
-          onAccept={() =>
-            webrtc.acceptCall(
-              webrtc.remoteUser,
-              webrtc.callType,
-              webrtc.incomingSignalRef.current
-            )
-          }
-          onReject={() =>
-            webrtc.rejectCall(webrtc.remoteUser?.id, webrtc.callType)
-          }
+          callState={webrtc.callState}
+          onAccept={webrtc.acceptCall}
+          onReject={webrtc.rejectCall}
+        />
+      )}
+
+      {/* Global active call overlay — shows on any page for calling / connected states */}
+      {(webrtc.callState.status === 'calling' || webrtc.callState.status === 'connected') && (
+        <ActiveCall
+          callState={webrtc.callState}
+          remoteStreamReady={webrtc.remoteStreamReady}
+          localVideoRef={webrtc.localVideoRef}
+          remoteVideoRef={webrtc.remoteVideoRef}
+          onEnd={webrtc.endCall}
+          onToggleMic={webrtc.toggleMic}
+          onToggleCamera={webrtc.toggleCamera}
+          duration={webrtc.formatDuration(webrtc.callState.callDuration)}
         />
       )}
     </CallContext.Provider>

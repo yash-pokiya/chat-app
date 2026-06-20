@@ -6,13 +6,11 @@ const messageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Room',
       default: null,
-      index: true,
     },
     dmId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'DM',
       default: null,
-      index: true,
     },
     isDM: {
       type: Boolean,
@@ -22,12 +20,12 @@ const messageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: function () {
-        return this.type !== 'screenshot_alert' && this.type !== 'system';
+        return this.type !== 'screenshot_alert' && this.type !== 'system' && this.type !== 'call_log';
       },
     },
     type: {
       type: String,
-      enum: ['text', 'image', 'audio', 'video', 'location', 'timer', 'call', 'system', 'screenshot_alert'],
+      enum: ['text', 'image', 'audio', 'video', 'location', 'timer', 'call', 'call_log', 'system', 'screenshot_alert'],
       default: 'text',
     },
     systemType: {
@@ -46,8 +44,14 @@ const messageSchema = new mongoose.Schema(
     content: {
       type: String,
       required: function () {
-        return this.type !== 'screenshot_alert';
+        return this.type !== 'screenshot_alert' && this.type !== 'call_log';
       },
+    },
+    callData: {
+      callType:  { type: String, enum: ['video', 'audio'], default: null },
+      status:    { type: String, enum: ['completed', 'missed', 'declined', 'no_answer', null], default: null },
+      duration:  { type: Number, default: 0 },
+      callerId:  { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     },
     cloudinaryId: {
       type: String,
@@ -104,7 +108,9 @@ const messageSchema = new mongoose.Schema(
   { timestamps: false }
 );
 
-// Sparse TTL index — only deletes docs where expiresAt is set and isDM is false
-messageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
+// Compound indexes for optimized query performance with sorting
+messageSchema.index({ roomId: 1, createdAt: -1 });
+messageSchema.index({ dmId: 1, createdAt: -1 });
+messageSchema.index({ expiresAt: 1 });
 
 module.exports = mongoose.model('Message', messageSchema);

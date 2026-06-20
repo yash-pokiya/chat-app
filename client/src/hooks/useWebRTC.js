@@ -1,227 +1,401 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react'
+import SimplePeer from 'simple-peer'
+import toast from 'react-hot-toast'
 
-/**
- * useWebRTC — manages a WebRTC peer connection via simple-peer + socket signaling
- * Supports both video and audio-only calls.
- */
-export const useWebRTC = ({ socket, currentUser }) => {
-  const [callState, setCallState] = useState('idle'); // idle | ringing | incoming | active | ended
-  const [callType, setCallType] = useState(null); // 'video' | 'audio'
-  const [remoteUser, setRemoteUser] = useState(null);
-  const [localStream, setLocalStream] = useState(null);
-  const [remoteStream, setRemoteStream] = useState(null);
-  const [callDuration, setCallDuration] = useState(0);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isCameraOff, setIsCameraOff] = useState(false);
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+]
 
-  const peerRef = useRef(null);
-  const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const timerRef = useRef(null);
-  const incomingSignalRef = useRef(null);
+const useWebRTC = ({ socket, currentUser }) => {
+  const [callState, setCallState] = useState({
+    status: 'idle', callType: null,
+    remoteUser: null, callDuration: 0,
+  })
+  // ✅ Explicit flag — UI uses this to know when to 
+  // actually render the remote <video>, decoupled from 
+  // callState.status timing issues:
+  const [remoteStreamReady, setRemoteStreamReady] = useState(false)
 
-  const cleanup = useCallback(() => {
-    if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
-    if (localStream) { localStream.getTracks().forEach((t) => t.stop()); }
-    if (timerRef.current) clearInterval(timerRef.current);
-    setLocalStream(null);
-    setRemoteStream(null);
-    setCallState('idle');
-    setCallType(null);
-    setRemoteUser(null);
-    setCallDuration(0);
-    incomingSignalRef.current = null;
-  }, [localStream]);
+  const localStreamRef  = useRef(null)
+  const remoteStreamRef = useRef(null)
+  const peerRef          = useRef(null)
+  const localVideoRef    = useRef(null)
+  const remoteVideoRef   = useRef(null)
+  const durationTimer    = useRef(null)
+  const incomingSignal   = useRef(null)
+  const isCleanedUp      = useRef(true) // starts true — nothing to clean
+  const callTypeRef      = useRef(null)
+  const remoteUserRef    = useRef(null) // ✅ avoids stale closure in signal handler
 
-  const startTimer = useCallback(() => {
-    setCallDuration(0);
-    timerRef.current = setInterval(() => setCallDuration((d) => d + 1), 1000);
-  }, []);
+  //══════════════════════════════════════
+  // GET MEDIA — separate from peer creation entirely
+  //══════════════════════════════════════
+  const getStream = async (callType) => {
+    const constraints = {
+      audio: { echoCancellation: true, noiseSuppression: true },
+      video: callType === 'video'
+        ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+        : false,
+    }
+    const stream = await navigator.mediaDevices.getUserMedia(constraints)
+    localStreamRef.current = stream
 
-  const formatDuration = (secs) => {
-    const m = Math.floor(secs / 60).toString().padStart(2, '0');
-    const s = (secs % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
+    // Verify video tracks actually exist if this is a video call:
+    const videoTracks = stream.getVideoTracks()
+    const audioTracks = stream.getAudioTracks()
+    console.log('🎥 Stream tracks:', {
+      video: videoTracks.length,
+      audio: audioTracks.length,
+      videoEnabled: videoTracks[0]?.enabled,
+      videoReadyState: videoTracks[0]?.readyState,
+    })
 
-  // Initiate a call
-  const initiateCall = useCallback(async (toUser, type = 'video') => {
+    if (callType === 'video' && videoTracks.length === 0) {
+      console.error('❌ Video call requested but NO video track in stream!')
+    }
+
+    return stream
+  }
+
+  // Attach local stream to local video element with retries
+  const attachLocalVideo = useCallback(() => {
+    const tryAttach = (attempts = 0) => {
+      if (localVideoRef.current && localStreamRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current
+        localVideoRef.current.muted = true
+        localVideoRef.current.playsInline = true
+        localVideoRef.current.play()
+          .then(() => console.log('✅ Local video playing'))
+          .catch(err => console.warn('⚠️ Local play blocked:', err.message))
+      } else if (attempts < 15) {
+        setTimeout(() => tryAttach(attempts + 1), 100)
+      } else {
+        console.error('❌ Failed to attach local video after retries',
+          { refExists: !!localVideoRef.current,
+            streamExists: !!localStreamRef.current })
+      }
+    }
+    tryAttach()
+  }, [])
+
+  // Attach remote stream with retries
+  const attachRemoteVideo = useCallback((stream) => {
+    remoteStreamRef.current = stream
+    setRemoteStreamReady(true)
+
+    console.log('🔍 Remote stream track states:',
+      stream.getTracks().map(t => 
+        `${t.kind}: enabled=${t.enabled}, readyState=${t.readyState}`
+      ))
+
+    const tryAttach = (attempts = 0) => {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = stream
+        remoteVideoRef.current.playsInline = true
+        remoteVideoRef.current.play()
+          .then(() => console.log('✅ Remote video playing'))
+          .catch(err => console.warn('⚠️ Remote play blocked:', err.message))
+      } else if (attempts < 15) {
+        setTimeout(() => tryAttach(attempts + 1), 100)
+      } else {
+        console.error('❌ remoteVideoRef never became available')
+      }
+    }
+    tryAttach()
+  }, [])
+
+  //══════════════════════════════════════
+  // CREATE PEER — single source of truth
+  //══════════════════════════════════════
+  const createPeer = ({ initiator, stream, callType }) => {
+    const peer = new SimplePeer({
+      initiator,
+      trickle: true,
+      stream,
+      config: { iceServers: ICE_SERVERS },
+    })
+
+    peer.on('signal', (signal) => {
+      const toUserId = remoteUserRef.current?._id || remoteUserRef.current?.id
+      if (!toUserId) {
+        console.error('❌ No remoteUser set when trying to signal')
+        return
+      }
+      if (initiator) {
+        socket.emit('call:initiate', {
+          toUserId,
+          fromUser: {
+            _id: currentUser?._id || currentUser?.id, username: currentUser?.username,
+            displayName: currentUser?.displayName, avatar: currentUser?.avatar,
+          },
+          signal, callType,
+        })
+      } else {
+        socket.emit('call:accept', { toUserId, signal })
+      }
+    })
+
+    // ✅ Handle BOTH 'stream' and 'track' events — different
+    // simple-peer/browser combos fire one or the other:
+    peer.on('stream', (remoteStream) => {
+      console.log(`🎥 [${initiator ? 'CALLER' : 'CALLEE'}] 'stream' event fired`)
+      attachRemoteVideo(remoteStream)
+      setCallState(prev => ({ ...prev, status: 'connected' }))
+      startDurationTimer()
+    })
+
+    peer.on('track', (track, stream) => {
+      console.log(`🎥 [${initiator ? 'CALLER' : 'CALLEE'}] 'track' event fired:`, track.kind)
+      // Only attach if 'stream' event hasn't already done it:
+      if (!remoteStreamRef.current) {
+        attachRemoteVideo(stream)
+        setCallState(prev => ({ ...prev, status: 'connected' }))
+        startDurationTimer()
+      }
+    })
+
+    peer.on('connect', () => console.log('✅ Peer connected (data channel)'))
+
+    peer.on('error', (err) => {
+      console.error('❌ Peer error:', err.message)
+    })
+
+    peer.on('close', () => {
+      console.log('🔌 Peer closed')
+    })
+
+    return peer
+  }
+
+  //══════════════════════════════════════
+  // INITIATE CALL
+  //══════════════════════════════════════
+  const initiateCall = async (toUser, callType = 'video') => {
+    // Fail loudly if user details are missing
+    if (!toUser?._id || !toUser?.username) {
+      console.error('❌ initiateCall called with incomplete user:', toUser)
+      toast.error('Could not start call — user data missing')
+      return
+    }
+
+    if (!isCleanedUp.current) {
+      console.warn('⚠️ Previous call not cleaned up, forcing cleanup')
+      cleanup()
+    }
+    isCleanedUp.current = false
+    remoteUserRef.current = toUser
+    callTypeRef.current = callType
+
+    // Set callState synchronously before requesting device media
+    setCallState({ status: 'calling', callType, remoteUser: toUser, callDuration: 0 })
+
     try {
-      const constraints = type === 'video'
-        ? { audio: true, video: { facingMode: 'user' } }
-        : { audio: true, video: false };
+      const stream = await getStream(callType)
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      setLocalStream(stream);
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+      // Give React one tick to render the calling UI 
+      // (with local <video>) before attaching:
+      requestAnimationFrame(() => attachLocalVideo())
 
-      const SimplePeer = (await import('simple-peer')).default;
-      const peer = new SimplePeer({ initiator: true, trickle: false, stream });
+      const peer = createPeer({ initiator: true, stream, callType })
+      peerRef.current = peer
 
-      peer.on('signal', (signal) => {
-        socket.emit(`call:${type}:initiate`, { toUserId: toUser.id, signal });
-      });
-
-      peer.on('stream', (remote) => {
-        setRemoteStream(remote);
-        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remote;
-      });
-
-      peer.on('error', (err) => {
-        console.error('[WebRTC] Peer error:', err);
-        endCall(toUser.id, type);
-      });
-
-      peer.on('close', () => cleanup());
-
-      peerRef.current = peer;
-      setCallType(type);
-      setRemoteUser(toUser);
-      setCallState('ringing');
+      socket.once('call:user:unavailable', () => {
+        cleanup()
+        setCallState({ status: 'idle', callType: null, remoteUser: null, callDuration: 0 })
+        alert(`${toUser.username} is not available right now`)
+      })
     } catch (err) {
-      console.error('[WebRTC] getUserMedia error:', err);
-      cleanup();
+      console.error('❌ initiateCall failed:', err)
+      cleanup()
+      handleMediaError(err)
     }
-  }, [socket]);
+  }
 
-  // Accept an incoming call
-  const acceptCall = useCallback(async (fromUser, type, incomingSignal) => {
-    try {
-      const constraints = type === 'video'
-        ? { audio: true, video: { facingMode: 'user' } }
-        : { audio: true, video: false };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      setLocalStream(stream);
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-
-      const SimplePeer = (await import('simple-peer')).default;
-      const peer = new SimplePeer({ initiator: false, trickle: false, stream });
-
-      peer.signal(incomingSignal || incomingSignalRef.current);
-
-      peer.on('signal', (signal) => {
-        socket.emit(`call:${type}:accept`, { toUserId: fromUser.id, signal });
-      });
-
-      peer.on('stream', (remote) => {
-        setRemoteStream(remote);
-        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remote;
-      });
-
-      peer.on('error', (err) => {
-        console.error('[WebRTC] Peer error:', err);
-        cleanup();
-      });
-
-      peer.on('close', () => cleanup());
-
-      peerRef.current = peer;
-      setCallType(type);
-      setRemoteUser(fromUser);
-      setCallState('active');
-      startTimer();
-    } catch (err) {
-      console.error('[WebRTC] Accept call error:', err);
-      cleanup();
-    }
-  }, [socket, startTimer]);
-
-  // Reject an incoming call
-  const rejectCall = useCallback((fromUserId, type) => {
-    socket.emit(`call:${type}:reject`, { toUserId: fromUserId });
-    cleanup();
-  }, [socket, cleanup]);
-
-  // End active call
-  const endCall = useCallback((toUserId, type) => {
-    const finalType = type || callType;
-    const duration = callDuration;
-    socket.emit(`call:${finalType}:end`, { toUserId: toUserId || remoteUser?.id, duration });
-    cleanup();
-    return duration;
-  }, [socket, callType, callDuration, remoteUser, cleanup]);
-
-  const toggleMute = useCallback(() => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach((t) => { t.enabled = !t.enabled; });
-      setIsMuted((m) => !m);
-    }
-  }, [localStream]);
-
-  const toggleCamera = useCallback(() => {
-    if (localStream) {
-      localStream.getVideoTracks().forEach((t) => { t.enabled = !t.enabled; });
-      setIsCameraOff((c) => !c);
-    }
-  }, [localStream]);
-
-  // Listen for socket call events
+  //══════════════════════════════════════
+  // SIGNAL RELAY LISTENERS (mounted once, always active)
+  //══════════════════════════════════════
   useEffect(() => {
-    if (!socket) return;
+    if (!socket) return
 
-    const onVideoIncoming = ({ fromUserId, fromUsername, signal }) => {
-      incomingSignalRef.current = signal;
-      setRemoteUser({ id: fromUserId, username: fromUsername, displayName: fromUsername });
-      setCallType('video');
-      setCallState('incoming');
-    };
+    const handleIncoming = ({ fromUser, signal, callType }) => {
+      console.log('🔔 Incoming call from:', fromUser.username)
+      incomingSignal.current = signal
+      remoteUserRef.current  = fromUser
+      callTypeRef.current    = callType
+      isCleanedUp.current    = false
+      setCallState({ status: 'incoming', callType, remoteUser: fromUser, callDuration: 0 })
+    }
 
-    const onAudioIncoming = ({ fromUserId, fromUsername, signal }) => {
-      incomingSignalRef.current = signal;
-      setRemoteUser({ id: fromUserId, username: fromUsername, displayName: fromUsername });
-      setCallType('audio');
-      setCallState('incoming');
-    };
+    const handleSignal = ({ signal }) => {
+      console.log('📡 Relayed signal received, type:', signal.type || 'ice-candidate')
+      if (peerRef.current && !peerRef.current.destroyed) {
+        peerRef.current.signal(signal)
+      } else {
+        console.warn('⚠️ Got signal but peer not ready yet')
+      }
+    }
 
-    const onVideoAccepted = ({ fromUserId, signal }) => {
-      peerRef.current?.signal(signal);
-      setCallState('active');
-      startTimer();
-    };
+    const handleRejected = () => {
+      cleanup()
+      setCallState({ status: 'idle', callType: null, remoteUser: null, callDuration: 0 })
+    }
 
-    const onAudioAccepted = ({ fromUserId, signal }) => {
-      peerRef.current?.signal(signal);
-      setCallState('active');
-      startTimer();
-    };
+    const handleEnded = () => {
+      cleanup()
+      setCallState(prev => ({ ...prev, status: 'ended' }))
+      setTimeout(() => setCallState({ status: 'idle', callType: null, remoteUser: null, callDuration: 0 }), 1200)
+    }
 
-    const onCallRejected = () => { cleanup(); };
-    const onCallEnded = ({ duration }) => { cleanup(); };
-
-    const onIceCandidate = ({ candidate }) => {
-      try { peerRef.current?.signal({ candidate }); } catch {}
-    };
-
-    socket.on('call:video:incoming', onVideoIncoming);
-    socket.on('call:audio:incoming', onAudioIncoming);
-    socket.on('call:video:accepted', onVideoAccepted);
-    socket.on('call:audio:accepted', onAudioAccepted);
-    socket.on('call:video:rejected', onCallRejected);
-    socket.on('call:audio:rejected', onCallRejected);
-    socket.on('call:video:ended', onCallEnded);
-    socket.on('call:audio:ended', onCallEnded);
-    socket.on('call:ice:candidate', onIceCandidate);
+    socket.on('call:incoming', handleIncoming)
+    socket.on('call:signal',   handleSignal)
+    socket.on('call:rejected', handleRejected)
+    socket.on('call:ended',    handleEnded)
 
     return () => {
-      socket.off('call:video:incoming', onVideoIncoming);
-      socket.off('call:audio:incoming', onAudioIncoming);
-      socket.off('call:video:accepted', onVideoAccepted);
-      socket.off('call:audio:accepted', onAudioAccepted);
-      socket.off('call:video:rejected', onCallRejected);
-      socket.off('call:audio:rejected', onCallRejected);
-      socket.off('call:video:ended', onCallEnded);
-      socket.off('call:audio:ended', onCallEnded);
-      socket.off('call:ice:candidate', onIceCandidate);
-    };
-  }, [socket, startTimer, cleanup]);
+      socket.off('call:incoming', handleIncoming)
+      socket.off('call:signal',   handleSignal)
+      socket.off('call:rejected', handleRejected)
+      socket.off('call:ended',    handleEnded)
+    }
+  }, [socket])
+
+  //══════════════════════════════════════
+  // ACCEPT CALL
+  //══════════════════════════════════════
+  const acceptCall = async () => {
+    try {
+      const stream = await getStream(callTypeRef.current)
+      setCallState(prev => ({ ...prev, status: 'connected' }))
+
+      requestAnimationFrame(() => attachLocalVideo())
+
+      const peer = createPeer({
+        initiator: false, stream, callType: callTypeRef.current,
+      })
+
+      if (incomingSignal.current) {
+        peer.signal(incomingSignal.current)
+        incomingSignal.current = null
+      }
+
+      peerRef.current = peer
+    } catch (err) {
+      console.error('❌ acceptCall failed:', err)
+      handleMediaError(err)
+      rejectCall()
+    }
+  }
+
+  const rejectCall = () => {
+    socket.emit('call:reject', { toUserId: remoteUserRef.current?._id || remoteUserRef.current?.id })
+    cleanup()
+    setCallState({ status: 'idle', callType: null, remoteUser: null, callDuration: 0 })
+  }
+
+  const endCall = () => {
+    socket.emit('call:end', { toUserId: remoteUserRef.current?._id || remoteUserRef.current?.id })
+    cleanup()
+    setCallState(prev => ({ ...prev, status: 'ended' }))
+    setTimeout(() => setCallState({ status: 'idle', callType: null, remoteUser: null, callDuration: 0 }), 1200)
+  }
+
+  //══════════════════════════════════════
+  // CLEANUP — guaranteed camera/mic OFF
+  //══════════════════════════════════════
+  const cleanup = useCallback(() => {
+    if (isCleanedUp.current) return
+    isCleanedUp.current = true
+    console.log('🧹 Cleanup started')
+
+    if (peerRef.current) {
+      try { peerRef.current.removeAllListeners(); peerRef.current.destroy() }
+      catch (e) {}
+      peerRef.current = null
+    }
+
+    ;[localStreamRef, remoteStreamRef].forEach(ref => {
+      ref.current?.getTracks().forEach(track => {
+        track.stop()
+        console.log(`🛑 Stopped ${track.kind} track (${track.label})`)
+      })
+      ref.current = null
+    })
+
+    if (localVideoRef.current)  localVideoRef.current.srcObject  = null
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null
+
+    clearInterval(durationTimer.current)
+    durationTimer.current = null
+    incomingSignal.current = null
+    remoteUserRef.current  = null
+    setRemoteStreamReady(false)
+
+    console.log('✅ Cleanup done — camera/mic released')
+  }, [])
+
+  //══════════════════════════════════════
+  // SAFETY NET — runs on tab close, nav away, unmount
+  //══════════════════════════════════════
+  useEffect(() => {
+    const handleUnload = () => {
+      if (!isCleanedUp.current) {
+        socket?.emit('call:end', { toUserId: remoteUserRef.current?._id || remoteUserRef.current?.id })
+        cleanup()
+      }
+    }
+    window.addEventListener('beforeunload', handleUnload)
+    window.addEventListener('pagehide', handleUnload)
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload)
+      window.removeEventListener('pagehide', handleUnload)
+      cleanup() // ✅ ALWAYS cleanup on unmount, no conditions
+    }
+  }, [cleanup])
+
+  const handleMediaError = (err) => {
+    const msgs = {
+      NotAllowedError: 'Camera/mic permission denied.',
+      NotFoundError: 'No camera/mic found.',
+      NotReadableError: 'Camera/mic already in use by another app.',
+    }
+    alert(msgs[err.name] || 'Could not access camera/microphone.')
+  }
+
+  const toggleMic = () => localStreamRef.current?.getAudioTracks().forEach(t => t.enabled = !t.enabled)
+  const toggleCamera = () => localStreamRef.current?.getVideoTracks().forEach(t => t.enabled = !t.enabled)
+
+  const startDurationTimer = () => {
+    clearInterval(durationTimer.current)
+    durationTimer.current = setInterval(() => {
+      setCallState(prev => ({ ...prev, callDuration: prev.callDuration + 1 }))
+    }, 1000)
+  }
+
+  const formatDuration = (s) =>
+    `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`
 
   return {
-    callState, callType, remoteUser, localStream, remoteStream,
-    callDuration, isMuted, isCameraOff,
+    callState, remoteStreamReady,
     localVideoRef, remoteVideoRef,
     initiateCall, acceptCall, rejectCall, endCall,
-    toggleMute, toggleCamera, formatDuration,
-    incomingSignalRef,
-  };
-};
+    toggleMic, toggleCamera, formatDuration,
+  }
+}
+
+export default useWebRTC
