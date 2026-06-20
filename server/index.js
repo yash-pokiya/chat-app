@@ -25,10 +25,14 @@ const globalErrorHandler = require('./src/middleware/errorHandler');
 const app = express();
 const server = http.createServer(app);
 
+const allowedOrigin = process.env.CLIENT_URL
+  ? process.env.CLIENT_URL.replace(/\/$/, '')
+  : 'http://localhost:5173';
+
 // ─── Socket.io ───────────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: allowedOrigin,
     credentials: true,
     methods: ['GET', 'POST'],
   },
@@ -40,10 +44,8 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 
-
-
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: allowedOrigin,
   credentials: true,
 }));
 
