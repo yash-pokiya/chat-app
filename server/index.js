@@ -140,7 +140,8 @@ const seedAdmin = async () => {
         await existing.save({ validateBeforeSave: false });
         logger.info(`🔑 Updated existing user "${adminUsername}" to admin role.`);
       }
-      // Update password if it changed in .env
+
+      // Check if password matches (always assuming plaintext env input)
       const passwordMatch = await existing.comparePassword(adminPassword);
       if (!passwordMatch) {
         existing.passwordHash = adminPassword;
