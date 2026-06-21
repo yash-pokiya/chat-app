@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { Toaster } from 'react-hot-toast';
+import { Toaster, ToastBar, toast } from 'react-hot-toast';
 import { AnimatePresence } from 'framer-motion';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider, useSocket } from './context/SocketContext';
@@ -12,7 +12,6 @@ import Chat from './pages/Chat';
 import Waiting from './pages/Waiting';
 import DMChat from './pages/DMChat';
 import Profile from './pages/Profile';
-import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
 import useOnlineStatus from './hooks/useOnlineStatus';
 import useFriendStatus from './hooks/useFriendStatus';
@@ -27,12 +26,14 @@ const ProtectedRoute = ({ children }) => {
       </div>
     );
   }
-  return user ? children : <Navigate to="/" replace />;
+  if (!user) return <Navigate to="/" replace />;
+  if (user.role === 'admin') return <Navigate to="/admin" replace />;
+  return children;
 };
 
 const AdminProtectedRoute = ({ children }) => {
   const adminToken = localStorage.getItem('adminToken');
-  return adminToken ? children : <Navigate to="/admin/login" replace />;
+  return adminToken ? children : <Navigate to="/" replace />;
 };
 
 function AppRoutes() {
@@ -52,7 +53,6 @@ function AppRoutes() {
         <Route path="/waiting/:roomCode" element={<ProtectedRoute><Waiting /></ProtectedRoute>} />
         <Route path="/dm/:dmId" element={<ProtectedRoute><DMChat /></ProtectedRoute>} />
         <Route path="/profile/:username" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-        <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminProtectedRoute><AdminDashboard /></AdminProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -82,22 +82,31 @@ function App() {
           position="top-right"
           toastOptions={{
             duration: 5000,
-            style: {
-              background: '#ffffff',
-              color: '#1A1A2E',
-              border: '1px solid #E5E7EB',
-              borderRadius: '14px',
-              boxShadow: '0 8px 32px rgba(108, 99, 255, 0.12)',
-              fontFamily: 'Inter, sans-serif',
-              fontSize: '14px',
-              fontWeight: '500',
-              padding: '12px 16px',
-              maxWidth: '92vw',
-            },
+            className: 'bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 border border-gray-150 dark:border-gray-800 rounded-2xl shadow-xl font-medium text-sm px-4 py-3 max-w-[92vw] !font-sans',
             success: { iconTheme: { primary: '#10B981', secondary: '#fff' } },
             error:   { iconTheme: { primary: '#EF4444', secondary: '#fff' } },
           }}
-        />
+        >
+          {(t) => (
+            <ToastBar toast={t}>
+              {({ icon, message }) => (
+                <>
+                  {icon}
+                  {message}
+                  {t.type !== 'loading' && (
+                    <button
+                      onClick={() => toast.dismiss(t.id)}
+                      className="ml-2 p-1 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800/60 transition-colors flex items-center justify-center flex-shrink-0"
+                      style={{ fontSize: '11px', width: '20px', height: '20px', border: 'none', background: 'transparent', cursor: 'pointer' }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </>
+              )}
+            </ToastBar>
+          )}
+        </Toaster>
       </AuthProvider>
     </BrowserRouter>
   );

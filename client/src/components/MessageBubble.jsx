@@ -6,6 +6,7 @@ import { Smile, CornerUpLeft, Volume2, Play, Pause, Copy, Check, Shield, Pin } f
 
 import { QuotedMessage } from './ReplyPreview';
 import ReactionBar from './ReactionBar';
+import SwipeableMessage from './SwipeableMessage';
 
 const fmt = (d) => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -132,6 +133,7 @@ function AudioPlayer({ src, duration, isSent }) {
 export default function MessageBubble({ message, isSent, showAvatar, partnerName, onReact, onReply, onPin, socket, roomCode, user }) {
   const [open, setOpen] = useState(false);
   const [showReactionBar, setShowReactionBar] = useState(false);
+  const [anchorRect, setAnchorRect] = useState(null);
   const [floatingEmojis, setFloatingEmojis] = useState([]);
   const [timeLeft, setTimeLeft] = useState(10);
   const [isDestructed, setIsDestructed] = useState(false);
@@ -179,6 +181,15 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
   // Touch handlers for mobile long press
   const onTouchStart = () => {
     longPressTimer.current = setTimeout(() => {
+      if (navigator.vibrate) {
+        try {
+          navigator.vibrate(15);
+        } catch (_) {}
+      }
+      const messageEl = document.getElementById(`msg-${message._id}`);
+      if (messageEl) {
+        setAnchorRect(messageEl.getBoundingClientRect());
+      }
       setShowReactionBar(true);
     }, 450);
   };
@@ -201,18 +212,19 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
   };
 
   return (
-    <motion.div
-      id={`msg-${message._id}`}
-      initial={{ opacity: 0, y: 8, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-      className={`group relative flex items-end gap-2 mb-2 p-1 rounded-2xl transition-all ${
-        isSent ? 'flex-row-reverse' : 'flex-row'
-      } ${isDestructed ? 'animate-self-destruct' : ''}`}
-      onTouchStart={onTouchStart}
-      onTouchEnd={onTouchEnd}
-      onTouchMove={() => clearTimeout(longPressTimer.current)}
-    >
+    <SwipeableMessage mine={isSent} onReply={() => onReply(message)}>
+      <motion.div
+        id={`msg-${message._id}`}
+        initial={{ opacity: 0, y: 8, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+        className={`group relative flex items-end gap-2 mb-2 p-1 rounded-2xl transition-all ${
+          isSent ? 'flex-row-reverse' : 'flex-row'
+        } ${isDestructed ? 'animate-self-destruct' : ''}`}
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+        onTouchMove={() => clearTimeout(longPressTimer.current)}
+      >
       {/* Floating Emojis */}
       <div className="absolute inset-0 pointer-events-none z-40 overflow-visible">
         {floatingEmojis.map((item) => (
@@ -251,20 +263,19 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
         <div className="relative flex items-center gap-2 group-hover:opacity-100">
           {/* Bubble container */}
           <div className="relative">
-            {/* Quote Reply display inside message bubble */}
-            {message.replyTo && (
-              <QuotedMessage
-                replyTo={message.replyTo}
-                onScrollTo={(id) => {
-                  const el = document.getElementById(`msg-${id}`);
-                  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }}
-              />
-            )}
-
             {/* Main content body */}
             {isImage ? (
-              <>
+              <div className={`flex flex-col gap-1.5 p-1.5 rounded-2xl ${isSent ? 'bg-violet-600/10 dark:bg-violet-900/20' : 'bg-white dark:bg-gray-800 border border-gray-150 dark:border-gray-700'}`}>
+                {message.replyTo && (
+                  <QuotedMessage
+                    replyTo={message.replyTo}
+                    isSent={false}
+                    onScrollTo={(id) => {
+                      const el = document.getElementById(`msg-${id}`);
+                      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }}
+                  />
+                )}
                 <img
                   src={message.content}
                   onClick={() => setOpen(true)}
@@ -276,13 +287,33 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
                   close={() => setOpen(false)}
                   slides={[{ src: message.content }]}
                 />
-              </>
+              </div>
             ) : isAudio ? (
               <div className={isSent ? 'bubble-sent dark:bg-violet-900/50' : 'bubble-recv dark:bg-gray-800'}>
+                {message.replyTo && (
+                  <QuotedMessage
+                    replyTo={message.replyTo}
+                    isSent={isSent}
+                    onScrollTo={(id) => {
+                      const el = document.getElementById(`msg-${id}`);
+                      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }}
+                  />
+                )}
                 <AudioPlayer src={message.content} duration={message.duration} isSent={isSent} />
               </div>
             ) : (
               <div className={isSent ? 'bubble-sent dark:bg-violet-900/50' : 'bubble-recv dark:bg-gray-800'}>
+                {message.replyTo && (
+                  <QuotedMessage
+                    replyTo={message.replyTo}
+                    isSent={isSent}
+                    onScrollTo={(id) => {
+                      const el = document.getElementById(`msg-${id}`);
+                      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }}
+                  />
+                )}
                 <p dangerouslySetInnerHTML={{ __html: parseFormatting(message.content) }} className="break-words whitespace-pre-wrap leading-relaxed text-sm dark:text-white" />
               </div>
             )}
@@ -364,28 +395,46 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
         )}
         <div className="relative">
           <button
-            onClick={() => setShowReactionBar(!showReactionBar)}
+            onClick={() => {
+              if (showReactionBar) {
+                setShowReactionBar(false);
+                setAnchorRect(null);
+              } else {
+                const messageEl = document.getElementById(`msg-${message._id}`);
+                if (messageEl) {
+                  setAnchorRect(messageEl.getBoundingClientRect());
+                }
+                setShowReactionBar(true);
+              }
+            }}
             className="p-1.5 rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-violet-500 shadow-sm transition-transform active:scale-90"
             title="React"
           >
             <Smile size={13} />
           </button>
           
-          {showReactionBar && (
+          {showReactionBar && anchorRect && (
             <ReactionBar
               message={message}
               currentUser={user}
+              anchorRect={anchorRect}
               onReact={(emoji) => {
                 onReact(emoji);
                 setShowReactionBar(false);
+                setAnchorRect(null);
               }}
-              onClose={() => setShowReactionBar(false)}
-              position="top"
+              onClose={() => {
+                setShowReactionBar(false);
+                setAnchorRect(null);
+              }}
+              onReply={() => onReply(message)}
+              onPin={onPin ? () => onPin(message) : undefined}
               isMe={isSent}
             />
           )}
         </div>
       </div>
     </motion.div>
+    </SwipeableMessage>
   );
 }

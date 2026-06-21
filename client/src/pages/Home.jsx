@@ -83,6 +83,13 @@ export default function Home() {
     };
   }, [socket, navigate]);
 
+  // Redirect admin users to the admin dashboard
+  useEffect(() => {
+    if (user?.role === 'admin' || localStorage.getItem('adminToken')) {
+      navigate('/admin', { replace: true });
+    }
+  }, [user, navigate]);
+
   // Search debounce
   useEffect(() => {
     if (!searchQuery.trim() || searchQuery.length < 2) { setSearchResults([]); return; }

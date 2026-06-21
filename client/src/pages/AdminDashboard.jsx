@@ -39,7 +39,7 @@ export default function AdminDashboard() {
     if (!silent) setLoading(true); else setRefreshing(true);
     try {
       const token = localStorage.getItem('adminToken');
-      if (!token) { navigate('/admin/login'); return; }
+      if (!token) { navigate('/'); return; }
       const h = { headers: { Authorization: `Bearer ${token}` } };
       const [s, r, m, u] = await Promise.all([
         api.get('/admin/stats', h),
@@ -55,7 +55,8 @@ export default function AdminDashboard() {
       if (err.message?.includes('401') || err.message?.includes('Invalid') || err.message?.includes('denied') || err.message?.includes('token')) {
         toast.error(`Session expired: ${err.message}`);
         localStorage.removeItem('adminToken');
-        navigate('/admin/login');
+        localStorage.removeItem('token');
+        window.location.href = '/';
       } else {
         toast.error(err.message || 'Failed to load dashboard.');
       }
@@ -69,7 +70,8 @@ export default function AdminDashboard() {
   const handleLogout = async () => {
     try { await api.post('/admin/logout', {}, { headers: authHeader() }); } catch {}
     localStorage.removeItem('adminToken');
-    navigate('/admin/login');
+    localStorage.removeItem('token');
+    window.location.href = '/';
   };
 
   const deleteRoom = async (id) => {

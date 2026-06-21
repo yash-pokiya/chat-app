@@ -18,6 +18,7 @@ const friendRoutes = require('./src/routes/friendRoutes');
 const dmRoutes = require('./src/routes/dmRoutes');
 const profileRoutes = require('./src/routes/profileRoutes');
 const callRoutes = require('./src/routes/callRoutes');
+const wallpaperRoutes = require('./src/routes/wallpaperRoutes');
 const socketHandler = require('./src/socket/socketHandler');
 const { initCronJobs } = require('./src/jobs/cronJobs');
 const globalErrorHandler = require('./src/middleware/errorHandler');
@@ -39,6 +40,11 @@ const io = new Server(server, {
   },
 });
 socketHandler(io);
+ 
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
 
 // ─── Security & Middlewares ──────────────────────────────────────────────────
 app.use(helmet({
@@ -87,6 +93,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/dm', dmRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/wallpapers', wallpaperRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/users', profileRoutes); // search users alias
 

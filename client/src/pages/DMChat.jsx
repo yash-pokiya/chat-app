@@ -7,9 +7,12 @@ import { useCall } from '../context/CallContext';
 import { useConversations } from '../context/ConversationContext';
 import { useLocation } from '../hooks/useLocation';
 import ReactionBar from '../components/ReactionBar';
+import SwipeableMessage from '../components/SwipeableMessage';
+import BackgroundPicker from '../components/BackgroundPicker';
+import ChatBackgroundView from '../components/ChatBackgroundView';
 import {
   ArrowLeft, Send, Image, MapPin, Video, Phone, FileText, Timer,
-  Pencil, Smile, MoreVertical, Pin, Reply, Copy, Trash2, Mic, Plus
+  Pencil, Smile, MoreVertical, Pin, Reply, Copy, Trash2, Mic, Plus, Palette
 } from 'lucide-react';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
@@ -56,6 +59,46 @@ function Avatar({ user, size = 8, className = '' }) {
   );
 }
 
+const PRESET_TINTS = {
+  default: {
+    bg: 'bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl',
+    border: 'border-gray-100 dark:border-gray-800'
+  },
+  lavender: {
+    bg: 'bg-violet-50/70 dark:bg-violet-950/40 backdrop-blur-xl',
+    border: 'border-violet-200/50 dark:border-violet-900/40 shadow-[0_1px_8px_rgba(139,92,246,0.08)]'
+  },
+  mint: {
+    bg: 'bg-emerald-50/70 dark:bg-emerald-950/40 backdrop-blur-xl',
+    border: 'border-emerald-200/50 dark:border-emerald-900/40 shadow-[0_1px_8px_rgba(16,185,129,0.08)]'
+  },
+  peach: {
+    bg: 'bg-amber-50/70 dark:bg-orange-950/40 backdrop-blur-xl',
+    border: 'border-amber-200/50 dark:border-orange-900/40 shadow-[0_1px_8px_rgba(245,158,11,0.08)]'
+  },
+  sky: {
+    bg: 'bg-sky-50/70 dark:bg-sky-950/40 backdrop-blur-xl',
+    border: 'border-sky-200/50 dark:border-sky-900/40 shadow-[0_1px_8px_rgba(14,165,233,0.08)]'
+  },
+  rose: {
+    bg: 'bg-rose-50/70 dark:bg-rose-950/40 backdrop-blur-xl',
+    border: 'border-rose-200/50 dark:border-rose-900/40 shadow-[0_1px_8px_rgba(244,63,94,0.08)]'
+  },
+  dots: {
+    bg: 'bg-white/85 dark:bg-gray-900/85 backdrop-blur-xl',
+    border: 'border-gray-200/30 dark:border-gray-800/30'
+  },
+  grid: {
+    bg: 'bg-white/85 dark:bg-gray-900/85 backdrop-blur-xl',
+    border: 'border-gray-200/30 dark:border-gray-800/30'
+  }
+};
+
+const CUSTOM_TINT = {
+  bg: 'bg-white/60 dark:bg-gray-950/50 backdrop-blur-xl',
+  border: 'border-gray-200/20 dark:border-gray-800/20 shadow-lg'
+};
+
 export default function DMChat() {
   const { dmId } = useParams();
   const { user } = useAuth();
@@ -70,6 +113,20 @@ export default function DMChat() {
   const [uploads, setUploads] = useState([]);
   const [floatingEmojis, setFloatingEmojis] = useState([]);
   const [activePickerMessageId, setActivePickerMessageId] = useState(null);
+  const [anchorRect, setAnchorRect] = useState(null);
+  const [showBackgroundPicker, setShowBackgroundPicker] = useState(false);
+  const [chatBackground, setChatBackground] = useState({ type: 'preset', presetId: 'default' });
+  
+  const getThemeTint = () => {
+    if (!chatBackground) return PRESET_TINTS.default;
+    if (chatBackground.type === 'custom') {
+      return CUSTOM_TINT;
+    }
+    const presetId = chatBackground.presetId || 'default';
+    return PRESET_TINTS[presetId] || PRESET_TINTS.default;
+  };
+  const themeTint = getThemeTint();
+
   const pickerRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [replyTo, setReplyTo] = useState(null);
@@ -82,7 +139,6 @@ export default function DMChat() {
   const [lightboxSaveFn, setLightboxSaveFn] = useState(null);
   const [timerMinutes, setTimerMinutes] = useState('5');
   const [timerState, setTimerState] = useState(null);
-  const [contextMenu, setContextMenu] = useState(null);
   const [isTyping, setIsTyping] = useState(false);
   const [partnerTyping, setPartnerTyping] = useState(false);
   const [firstUnreadId, setFirstUnreadId] = useState(null);
@@ -200,6 +256,31 @@ export default function DMChat() {
     // Also clear in backend DB:
     api.put(`/dm/${dmId}/read`).catch(() => {});
   }, [socket, dmId, connected]);
+ 
+  // Fetch current background on chat load
+  useEffect(() => {
+    if (!dmId) return;
+    api.get(`/dm/${dmId}/background`).then(({ data }) => {
+      if (data.success) setChatBackground(data.background);
+    }).catch(() => {});
+  }, [dmId]);
+
+  // Listen for real-time background sync from partner
+  useEffect(() => {
+    if (!socket) return;
+    const onBackgroundUpdated = ({ background }) => {
+      setChatBackground(background);
+    };
+    const onWallpaperUpdate = ({ background }) => {
+      setChatBackground(background);
+    };
+    socket.on('dm:background:updated', onBackgroundUpdated);
+    socket.on('wallpaper:update', onWallpaperUpdate);
+    return () => {
+      socket.off('dm:background:updated', onBackgroundUpdated);
+      socket.off('wallpaper:update', onWallpaperUpdate);
+    };
+  }, [socket]);
 
   // Close emoji picker on outside click
   useEffect(() => {
@@ -351,13 +432,17 @@ export default function DMChat() {
 
   // ── Scroll container handler: hide "new messages" when near bottom ──
   const handleScroll = useCallback(() => {
+    if (activePickerMessageId) {
+      setActivePickerMessageId(null);
+      setAnchorRect(null);
+    }
     const container = containerRef.current;
     if (!container) return;
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     if (distanceFromBottom < 100 && showScrollBtn) {
       setShowScrollBtn(false);
     }
-  }, [showScrollBtn]);
+  }, [showScrollBtn, activePickerMessageId]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -420,21 +505,30 @@ export default function DMChat() {
 
   const handleLongPress = (msg, e) => {
     e.preventDefault();
-    setContextMenu({ message: msg, x: e.clientX || e.touches?.[0]?.clientX, y: e.clientY || e.touches?.[0]?.clientY });
+    if (navigator.vibrate) {
+      try {
+        navigator.vibrate(15);
+      } catch (_) {}
+    }
+    const messageEl = document.getElementById(`msg-${msg._id}`);
+    if (messageEl) {
+      setAnchorRect(messageEl.getBoundingClientRect());
+    }
     setActivePickerMessageId(msg._id);
   };
 
   const handlePin = (msg) => {
     socket?.emit('message:pin', { messageId: msg._id, dmId });
-    setContextMenu(null);
   };
 
-  const handleReply = (msg) => { setReplyTo(msg); setContextMenu(null); inputRef.current?.focus(); };
+  const handleReply = (msg) => {
+    setReplyTo(msg);
+    inputRef.current?.focus();
+  };
 
   const handleCopy = (msg) => {
     navigator.clipboard.writeText(msg.content || '');
     toast.success('Copied!');
-    setContextMenu(null);
   };
 
   const handleUnpin = () => {
@@ -539,6 +633,8 @@ export default function DMChat() {
     setShowTimerInput(false);
   };
 
+
+
   const isMine = (msg) => (msg.senderId?._id || msg.senderId) === user?.id || (msg.senderId?._id || msg.senderId)?.toString() === user?.id?.toString();
 
   if (loading) {
@@ -551,6 +647,9 @@ export default function DMChat() {
 
   return (
     <div className="h-[100dvh] flex flex-col bg-gray-50 relative overflow-hidden">
+      {/* Sticky Wallpaper Background */}
+      <ChatBackgroundView background={chatBackground} />
+
       {/* Incoming call overlay — handled globally by CallProvider */}
 
       {/* Notepad */}
@@ -584,35 +683,10 @@ export default function DMChat() {
         )}
       </AnimatePresence>
 
-      {/* Context menu */}
-      <AnimatePresence>
-        {contextMenu && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => { setContextMenu(null); setActivePickerMessageId(null); }} />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              style={{ top: Math.min(contextMenu.y, window.innerHeight - 200), left: Math.min(contextMenu.x, window.innerWidth - 180) }}
-              className="fixed z-50 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden w-44"
-            >
-              {[
-                { icon: <Reply size={14}/>, label: 'Reply', fn: () => handleReply(contextMenu.message) },
-                { icon: <Pin size={14}/>, label: 'Pin', fn: () => handlePin(contextMenu.message) },
-                { icon: <Copy size={14}/>, label: 'Copy', fn: () => handleCopy(contextMenu.message) },
-              ].map(({ icon, label, fn }) => (
-                <button key={label} onClick={fn}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left">
-                  <span className="text-gray-400">{icon}</span> {label}
-                </button>
-              ))}
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+
 
       {/* Top bar */}
-      <div className="flex-shrink-0 z-20 bg-white/95 backdrop-blur-xl border-b border-gray-100 px-4 py-2.5 sm:py-3 flex items-center gap-3 pt-[calc(0.625rem+env(safe-area-inset-top))] shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+      <div className={`flex-shrink-0 z-20 transition-all duration-300 px-4 py-2.5 sm:py-3 flex items-center gap-3 pt-[calc(0.625rem+env(safe-area-inset-top))] border-b ${themeTint.bg} ${themeTint.border}`}>
         <button onClick={() => navigate('/')} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors flex-shrink-0">
           <ArrowLeft size={18} />
         </button>
@@ -640,6 +714,9 @@ export default function DMChat() {
           </button>
           <button onClick={() => setShowTimerInput(true)} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors" title="Shared Timer">
             <Timer size={18} />
+          </button>
+          <button onClick={() => setShowBackgroundPicker(true)} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors" title="Customize Background">
+            <Palette size={18} />
           </button>
           {partner && (
             <>
@@ -696,160 +773,219 @@ export default function DMChat() {
       )}
 
       {/* Messages */}
-      <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-5 py-5 space-y-3 min-h-0 bg-gradient-to-b from-gray-50/50 to-white">
+      <div 
+        ref={containerRef} 
+        onScroll={handleScroll} 
+        className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-5 py-5 space-y-3 min-h-0 relative z-10 bg-transparent"
+      >
         {messages.map((msg, idx) => {
           const mine = isMine(msg);
           const showDivider = firstUnreadId && msg._id === firstUnreadId;
           return (
             <React.Fragment key={msg._id}>
             {showDivider && <UnreadDivider count={unreadCount} />}
-            <motion.div
-              id={`msg-${msg._id}`}
-              initial={initialScrollDone ? { opacity: 0, y: 10 } : false}
-              animate={{ opacity: 1, y: 0 }}
-              className={`flex gap-2.5 ${mine ? 'justify-end' : 'justify-start'} msg-in`}
-              onContextMenu={(e) => { e.preventDefault(); handleLongPress(msg, e); }}
-              onTouchStart={(e) => {
-                longPressRef.current = setTimeout(() => handleLongPress(msg, e), 500);
-              }}
-              onTouchEnd={() => clearTimeout(longPressRef.current)}
-            >
-              {!mine && <Avatar user={msg.senderId} size={8} className="mt-auto mb-0.5 mr-0.5" />}
+            <SwipeableMessage mine={mine} onReply={() => handleReply(msg)}>
+              <motion.div
+                id={`msg-${msg._id}`}
+                initial={initialScrollDone ? { opacity: 0, y: 10 } : false}
+                animate={{ opacity: 1, y: 0 }}
+                className={`flex gap-2.5 ${mine ? 'justify-end' : 'justify-start'} msg-in relative z-10`}
+                onContextMenu={(e) => { e.preventDefault(); handleLongPress(msg, e); }}
+                onTouchStart={(e) => {
+                  longPressRef.current = setTimeout(() => handleLongPress(msg, e), 450);
+                }}
+                onTouchEnd={() => clearTimeout(longPressRef.current)}
+                onTouchMove={() => clearTimeout(longPressRef.current)}
+              >
+                {!mine && <Avatar user={msg.senderId} size={8} className="mt-auto mb-0.5 mr-0.5" />}
+ 
+                <div className={`max-w-[78%] sm:max-w-[70%] lg:max-w-sm ${mine ? 'items-end' : 'items-start'} flex flex-col gap-1 relative group`}>
+                  {/* Floating Emojis */}
+                  <div className="absolute inset-0 pointer-events-none z-40 overflow-visible">
+                    {floatingEmojis
+                      .filter((fe) => fe.messageId === msg._id)
+                      .map((item) => (
+                        <span
+                          key={item.id}
+                          className="absolute animate-float-up text-2xl select-none"
+                          style={{
+                            bottom: '100%',
+                            left: `calc(50% + ${item.offset}px)`,
+                          }}
+                        >
+                          {item.emoji}
+                        </span>
+                      ))}
+                  </div>
+ 
+                  {/* Message bubble + reaction picker button wrapper */}
+                  <div className="relative flex items-center gap-2">
+                    <div className="relative">
+                      {msg.type === 'image' ? (
+                        <div className={`flex flex-col gap-1.5 p-1.5 rounded-2xl relative z-10 ${mine ? 'bg-violet-600/10 dark:bg-violet-900/20' : 'bg-white dark:bg-gray-800 border border-gray-150 dark:border-gray-700'}`}>
+                          {msg.replyTo && (
+                            <QuotedMessage
+                              replyTo={msg.replyTo}
+                              isSent={false}
+                              onScrollTo={(id) => {
+                                document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              }}
+                            />
+                          )}
+                          <ImageMessage
+                            src={msg.content}
+                            onOpenLightbox={(url, saveFn) => {
+                              setLightboxImage(url);
+                              setLightboxSaveFn(() => saveFn);
+                            }}
+                          />
+                        </div>
+                      ) : msg.type === 'location' ? (
+                        <div className={`flex flex-col gap-1.5 p-1.5 rounded-2xl relative z-10 ${mine ? 'bg-violet-600/10 dark:bg-violet-900/20' : 'bg-white dark:bg-gray-800 border border-gray-150 dark:border-gray-700'}`}>
+                          {msg.replyTo && (
+                            <QuotedMessage
+                              replyTo={msg.replyTo}
+                              isSent={false}
+                              onScrollTo={(id) => {
+                                document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              }}
+                            />
+                          )}
+                          <LocationBubble
+                            id={msg._id}
+                            myCoords={location.myCoords}
+                            partnerCoords={location.partnerCoords}
+                            myUsername={user?.username}
+                            partnerUsername={partner?.username}
+                            distance={location.distance}
+                            partnerStopped={location.partnerStopped}
+                          />
+                        </div>
+                      ) : msg.type === 'timer' ? (
+                        timerState && (
+                          <div className={`flex flex-col gap-1.5 p-1.5 rounded-2xl relative z-10 ${mine ? 'bg-violet-600/10 dark:bg-violet-900/20' : 'bg-white dark:bg-gray-800 border border-gray-150 dark:border-gray-700'}`}>
+                            {msg.replyTo && (
+                              <QuotedMessage
+                                replyTo={msg.replyTo}
+                                isSent={false}
+                                onScrollTo={(id) => {
+                                  document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }}
+                              />
+                            )}
+                            <TimerBubble
+                              seconds={timerState.seconds}
+                              totalSeconds={timerState.totalSeconds}
+                              isRunning={timerState.isRunning}
+                              onPause={() => socket?.emit('timer:pause', { dmId })}
+                              onCancel={() => socket?.emit('timer:cancel', { dmId })}
+                            />
+                          </div>
+                        )
+                      ) : (
+                        <div className={`${mine ? 'bubble-sent' : 'bubble-recv'} ${
+                          chatBackground?.type === 'custom' ? 'shadow-md backdrop-blur-sm bg-white/95 dark:bg-gray-850/95' : ''
+                        } relative z-10`}>
+                          {msg.replyTo && (
+                            <QuotedMessage
+                              replyTo={msg.replyTo}
+                              isSent={mine}
+                              onScrollTo={(id) => {
+                                document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              }}
+                            />
+                          )}
+                          <p dangerouslySetInnerHTML={{ __html: parseFormatting(msg.content) }} className="break-words" />
+                        </div>
+                      )}
+                    </div>
 
-              <div className={`max-w-[78%] sm:max-w-[70%] lg:max-w-sm ${mine ? 'items-end' : 'items-start'} flex flex-col gap-1 relative group`}>
-                {/* Floating Emojis */}
-                <div className="absolute inset-0 pointer-events-none z-40 overflow-visible">
-                  {floatingEmojis
-                    .filter((fe) => fe.messageId === msg._id)
-                    .map((item) => (
-                      <span
-                        key={item.id}
-                        className="absolute animate-float-up text-2xl select-none"
-                        style={{
-                          bottom: '100%',
-                          left: `calc(50% + ${item.offset}px)`,
+                    {/* Reaction picker hover button */}
+                    <button
+                      onClick={() => {
+                        if (activePickerMessageId === msg._id) {
+                          setActivePickerMessageId(null);
+                          setAnchorRect(null);
+                        } else {
+                          const messageEl = document.getElementById(`msg-${msg._id}`);
+                          if (messageEl) {
+                            setAnchorRect(messageEl.getBoundingClientRect());
+                          }
+                          setActivePickerMessageId(msg._id);
+                        }
+                      }}
+                      className={`absolute top-1/2 -translate-y-1/2 ${
+                        mine ? '-left-8' : '-right-8'
+                      } w-7 h-7 rounded-full bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-sm transition-all duration-200 opacity-0 group-hover:opacity-100 hover:scale-110 hover:bg-gray-200 dark:hover:bg-gray-700 z-10`}
+                    >
+                      😊
+                    </button>
+
+                    {/* Reaction bar popup */}
+                    {activePickerMessageId === msg._id && anchorRect && (
+                      <ReactionBar
+                        message={msg}
+                        currentUser={user}
+                        anchorRect={anchorRect}
+                        onReact={(emoji) => {
+                          handleReact(msg._id, emoji);
+                          setActivePickerMessageId(null);
+                          setAnchorRect(null);
                         }}
-                      >
-                        {item.emoji}
-                      </span>
-                    ))}
-                </div>
-
-                {/* Reply preview */}
-                {msg.replyTo && (
-                  <QuotedMessage
-                    replyTo={msg.replyTo}
-                    onScrollTo={(id) => {
-                      document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }}
-                  />
-                )}
-
-                {/* Message bubble + reaction picker button wrapper */}
-                <div className="relative flex items-center gap-2">
-                  <div className="relative">
-                    {msg.type === 'image' ? (
-                      <ImageMessage
-                        src={msg.content}
-                        onOpenLightbox={(url, saveFn) => {
-                          setLightboxImage(url);
-                          setLightboxSaveFn(() => saveFn);
+                        onClose={() => {
+                          setActivePickerMessageId(null);
+                          setAnchorRect(null);
                         }}
+                        onReply={() => handleReply(msg)}
+                        onPin={() => handlePin(msg)}
+                        onCopy={() => handleCopy(msg)}
+                        isMe={mine}
                       />
-                    ) : msg.type === 'location' ? (
-                      <LocationBubble
-                        id={msg._id}
-                        myCoords={location.myCoords}
-                        partnerCoords={location.partnerCoords}
-                        myUsername={user?.username}
-                        partnerUsername={partner?.username}
-                        distance={location.distance}
-                        partnerStopped={location.partnerStopped}
-                      />
-                    ) : msg.type === 'timer' ? (
-                      timerState && (
-                        <TimerBubble
-                          seconds={timerState.seconds}
-                          totalSeconds={timerState.totalSeconds}
-                          isRunning={timerState.isRunning}
-                          onPause={() => socket?.emit('timer:pause', { dmId })}
-                          onCancel={() => socket?.emit('timer:cancel', { dmId })}
-                        />
-                      )
-                    ) : (
-                      <div className={mine ? 'bubble-sent' : 'bubble-recv'}>
-                        <p dangerouslySetInnerHTML={{ __html: parseFormatting(msg.content) }} className="break-words" />
-                      </div>
                     )}
                   </div>
 
-                  {/* Reaction picker hover button */}
-                  <button
-                    onClick={() => setActivePickerMessageId(activePickerMessageId === msg._id ? null : msg._id)}
-                    className={`absolute top-1/2 -translate-y-1/2 ${
-                      mine ? '-left-8' : '-right-8'
-                    } w-7 h-7 rounded-full bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-sm transition-all duration-200 opacity-0 group-hover:opacity-100 hover:scale-110 hover:bg-gray-200 dark:hover:bg-gray-700 z-10`}
-                  >
-                    😊
-                  </button>
+                  {/* Timestamp */}
+                  <div className="flex items-center gap-1 px-1.5 mt-0.5">
+                    <span className="text-[11px] text-gray-400 font-medium">
+                      {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    {mine && <MessageTicks status={msg.status} />}
+                  </div>
 
-                  {/* Reaction bar popup */}
-                  {activePickerMessageId === msg._id && (
-                    <ReactionBar
-                      message={msg}
-                      currentUser={user}
-                      onReact={(emoji) => {
-                        handleReact(msg._id, emoji);
-                        setActivePickerMessageId(null);
-                      }}
-                      onClose={() => setActivePickerMessageId(null)}
-                      position="top"
-                      isMe={mine}
-                    />
+                  {/* Reactions display */}
+                  {msg.reactions && msg.reactions.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {Object.values(msg.reactions.reduce((acc, r) => {
+                        if (!acc[r.emoji]) {
+                          acc[r.emoji] = { emoji: r.emoji, count: 0, userIds: [] };
+                        }
+                        acc[r.emoji].count += 1;
+                        acc[r.emoji].userIds.push(r.userId);
+                        return acc;
+                      }, {})).map((r, idx) => {
+                        const hasReacted = r.userIds.includes(user?.id?.toString() || user?._id?.toString());
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => handleReact(msg._id, r.emoji)}
+                            className={`border rounded-full px-2.5 py-1 text-xs flex items-center gap-1 shadow-sm hover:scale-110 active:scale-95 transition-all font-medium ${
+                              hasReacted
+                                ? 'bg-violet-100 border-violet-300 text-violet-700'
+                                : 'bg-white border-gray-200 text-gray-800'
+                            }`}
+                          >
+                            <span>{r.emoji}</span>
+                            {r.count > 1 && <span className="text-[10px]">{r.count}</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
 
-                {/* Timestamp */}
-                <div className="flex items-center gap-1 px-1.5 mt-0.5">
-                  <span className="text-[11px] text-gray-400 font-medium">
-                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                  {mine && <MessageTicks status={msg.status} />}
-                </div>
-
-                {/* Reactions display */}
-                {msg.reactions && msg.reactions.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-1.5">
-                    {Object.values(msg.reactions.reduce((acc, r) => {
-                      if (!acc[r.emoji]) {
-                        acc[r.emoji] = { emoji: r.emoji, count: 0, userIds: [] };
-                      }
-                      acc[r.emoji].count += 1;
-                      acc[r.emoji].userIds.push(r.userId);
-                      return acc;
-                    }, {})).map((r, idx) => {
-                      const hasReacted = r.userIds.includes(user?.id?.toString() || user?._id?.toString());
-                      return (
-                        <button
-                          key={idx}
-                          onClick={() => handleReact(msg._id, r.emoji)}
-                          className={`border rounded-full px-2.5 py-1 text-xs flex items-center gap-1 shadow-sm hover:scale-110 active:scale-95 transition-all font-medium ${
-                            hasReacted
-                              ? 'bg-violet-100 border-violet-300 text-violet-700'
-                              : 'bg-white border-gray-200 text-gray-800'
-                          }`}
-                        >
-                          <span>{r.emoji}</span>
-                          {r.count > 1 && <span className="text-[10px]">{r.count}</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {mine && <Avatar user={user} size={8} className="mt-auto mb-0.5 ml-0.5" />}
-            </motion.div>
+                {mine && <Avatar user={user} size={8} className="mt-auto mb-0.5 ml-0.5" />}
+              </motion.div>
+            </SwipeableMessage>
             </React.Fragment>
           );
         })}
@@ -914,7 +1050,7 @@ export default function DMChat() {
       </AnimatePresence>
 
       {/* Input bar */}
-      <div className="flex-shrink-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 px-3 sm:px-4 py-2.5 sm:py-3 flex items-end gap-1.5 sm:gap-2 pb-[calc(0.625rem+env(safe-area-inset-bottom))] shadow-[0_-1px_3px_rgba(0,0,0,0.03)]">
+      <div className={`flex-shrink-0 transition-all duration-300 px-3 sm:px-4 py-2.5 sm:py-3 flex items-end gap-1.5 sm:gap-2 pb-[calc(0.625rem+env(safe-area-inset-bottom))] border-t ${themeTint.bg} ${themeTint.border}`}>
         <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
 
         {/* Hide secondary icons on very small screens */}
@@ -1037,6 +1173,18 @@ export default function DMChat() {
           onClose={() => {
             setLightboxImage(null);
             setLightboxSaveFn(null);
+          }}
+        />
+      )}
+      {/* Background Picker Drawer */}
+      {showBackgroundPicker && (
+        <BackgroundPicker
+          dmId={dmId}
+          currentBackground={chatBackground}
+          onClose={() => setShowBackgroundPicker(false)}
+          onUpdate={(bg) => {
+            setChatBackground(bg);
+            setShowBackgroundPicker(false);
           }}
         />
       )}
