@@ -213,7 +213,7 @@ export default function Profile() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
+      <div className="min-h-[100dvh] flex items-center justify-center bg-white">
         <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
@@ -234,7 +234,7 @@ export default function Profile() {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-      className="min-h-screen bg-gray-50"
+      className="min-h-[100dvh] bg-gray-50"
     >
       {/* Header */}
       <div className="frosted-bar sticky top-0 z-20 px-4 py-3 flex items-center gap-3">

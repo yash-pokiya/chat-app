@@ -662,7 +662,7 @@ export default function Chat() {
 
   if (loadingRoom) {
     return (
-      <div className="min-h-screen bg-surface dark:bg-gray-950 flex items-center justify-center">
+      <div className="min-h-[100dvh] bg-surface dark:bg-gray-950 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
           <p className="text-sm text-ink-muted dark:text-gray-400">Loading room…</p>
@@ -684,7 +684,7 @@ export default function Chat() {
       initial="initial"
       animate="animate"
       exit="exit"
-      className="h-screen bg-surface-soft dark:bg-gray-950 flex flex-col overflow-hidden transition-colors duration-300"
+      className="h-[100dvh] bg-surface-soft dark:bg-gray-950 flex flex-col overflow-hidden transition-colors duration-300"
     >
       {/* Notepad */}
       {showNotepad && (
@@ -705,7 +705,7 @@ export default function Chat() {
       )}
 
       {/* ── Top bar (frosted) ── */}
-      <header className="frosted-bar dark:bg-gray-900/80 dark:border-gray-800 px-4 py-3 flex items-center gap-3 z-20 shrink-0">
+      <header className="frosted-bar dark:bg-gray-900/80 dark:border-gray-800 px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))] flex items-center gap-3 z-20 shrink-0">
         <motion.button
           onClick={handleLeave}
           whileTap={{ scale: 0.93 }}
@@ -949,7 +949,7 @@ export default function Chat() {
           </div>
 
           {/* ── Input bar (frosted) ── */}
-          <div className="frosted-bar dark:bg-gray-900/90 dark:border-gray-800 px-3 py-3 shrink-0">
+          <div className="frosted-bar dark:bg-gray-900/90 dark:border-gray-800 px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shrink-0">
             {/* Quoted Message Preview above input bar */}
             {replyTo && (
               <div className="animate-slide-up">

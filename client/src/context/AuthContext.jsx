@@ -36,6 +36,9 @@ export const AuthProvider = ({ children }) => {
     const { data } = await api.post('/auth/login', { username, password });
     if (data.success) {
       localStorage.setItem('token', data.token);
+      if (data.isAdmin && data.adminToken) {
+        localStorage.setItem('adminToken', data.adminToken);
+      }
       setUser(data.user);
     }
     return data;
@@ -44,6 +47,7 @@ export const AuthProvider = ({ children }) => {
   const logout = useCallback(async () => {
     try { await api.post('/auth/logout'); } catch {}
     localStorage.removeItem('token');
+    localStorage.removeItem('adminToken');
     setUser(null);
   }, []);
 

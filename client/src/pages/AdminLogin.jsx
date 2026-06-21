@@ -31,7 +31,7 @@ export default function AdminLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-surface-soft flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-[100dvh] bg-surface-soft flex items-center justify-center p-4 relative overflow-hidden">
       {/* Background blobs */}
       <div className="absolute -top-32 -right-32 w-80 h-80 rounded-full opacity-[0.06] animate-blob"
         style={{ background: 'linear-gradient(135deg, #6C63FF, #48CAE4)' }} />

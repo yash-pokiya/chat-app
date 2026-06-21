@@ -543,14 +543,14 @@ export default function DMChat() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
+      <div className="min-h-[100dvh] flex items-center justify-center bg-white">
         <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50 relative overflow-hidden">
+    <div className="h-[100dvh] flex flex-col bg-gray-50 relative overflow-hidden">
       {/* Incoming call overlay — handled globally by CallProvider */}
 
       {/* Notepad */}
@@ -612,7 +612,7 @@ export default function DMChat() {
       </AnimatePresence>
 
       {/* Top bar */}
-      <div className="flex-shrink-0 sticky top-0 z-20 bg-white/95 backdrop-blur-xl border-b border-gray-100 px-4 py-2.5 sm:py-3 flex items-center gap-3 pt-[calc(0.625rem+env(safe-area-inset-top))] shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+      <div className="flex-shrink-0 z-20 bg-white/95 backdrop-blur-xl border-b border-gray-100 px-4 py-2.5 sm:py-3 flex items-center gap-3 pt-[calc(0.625rem+env(safe-area-inset-top))] shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
         <button onClick={() => navigate('/')} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors flex-shrink-0">
           <ArrowLeft size={18} />
         </button>

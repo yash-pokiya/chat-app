@@ -54,7 +54,7 @@ export default function Waiting() {
       initial="initial"
       animate="animate"
       exit="exit"
-      className="min-h-screen bg-white dark:bg-gray-950 flex flex-col items-center justify-center p-4 relative overflow-hidden transition-colors duration-300"
+      className="min-h-[100dvh] bg-white dark:bg-gray-950 flex flex-col items-center justify-center p-4 relative overflow-hidden transition-colors duration-300"
     >
       {/* Background blobs */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">

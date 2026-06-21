@@ -85,7 +85,7 @@ export default function CallHistory() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
-      className="h-screen flex flex-col bg-gray-50"
+      className="h-[100dvh] flex flex-col bg-gray-50"
     >
       {/* Top bar */}
       <div className="frosted-bar px-4 py-4 flex items-center gap-3 z-10 flex-shrink-0">

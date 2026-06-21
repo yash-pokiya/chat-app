@@ -22,6 +22,8 @@ const register = catchAsync(async (req, res) => {
   }, 'Account created successfully.'));
 });
 
+const jwt = require('jsonwebtoken');
+
 const login = catchAsync(async (req, res) => {
   const { username, password } = req.body;
   const clientIP = req.ip || req.connection.remoteAddress;
@@ -30,7 +32,7 @@ const login = catchAsync(async (req, res) => {
   const token = authService.generateToken(user._id, user.username);
   authService.setTokenCookie(res, token);
 
-  res.status(200).json(new ApiResponse(200, {
+  const responseData = {
     user: {
       id: user._id,
       username: user.username,
@@ -39,7 +41,26 @@ const login = catchAsync(async (req, res) => {
       isOnline: user.isOnline,
     },
     token
-  }, 'Logged in successfully.'));
+  };
+
+  // If user is admin, also generate admin JWT and flag
+  if (user.role === 'admin') {
+    const adminToken = jwt.sign(
+      { username: user.username, role: 'admin' },
+      process.env.ADMIN_JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+    res.cookie('adminToken', adminToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'strict',
+      maxAge: 8 * 60 * 60 * 1000,
+    });
+    responseData.isAdmin = true;
+    responseData.adminToken = adminToken;
+  }
+
+  res.status(200).json(new ApiResponse(200, responseData, 'Logged in successfully.'));
 });
 
 const logout = catchAsync(async (req, res) => {

@@ -141,7 +141,7 @@ export default function AdminDashboard() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-surface-soft flex items-center justify-center gap-3">
+      <div className="min-h-[100dvh] bg-surface-soft flex items-center justify-center gap-3">
         <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
         <span className="text-ink-muted text-sm">Loading dashboard…</span>
       </div>
@@ -149,7 +149,7 @@ export default function AdminDashboard() {
   }
 
   return (
-    <div className="flex h-screen bg-surface-soft overflow-hidden">
+    <div className="flex h-[100dvh] bg-surface-soft overflow-hidden">
       {/* Desktop sidebar */}
       <div className="hidden md:flex w-56 shrink-0">
         <div className="w-full"><Sidebar /></div>

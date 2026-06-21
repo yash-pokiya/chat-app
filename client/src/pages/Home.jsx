@@ -7,7 +7,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { useConversations } from '../context/ConversationContext';
 import toast from 'react-hot-toast';
 import {
-  ArrowRight, Shuffle, Eye, EyeOff, LogIn, UserPlus, Lock, User as UserIcon,
+  ArrowRight, Shuffle, Eye, EyeOff, LogIn, LogOut, UserPlus, Lock, User as UserIcon,
   Sun, Moon, Search, Bell, MessageSquare, Shield, Check, X, ChevronRight
 } from 'lucide-react';
 import api from '../utils/api';
@@ -27,11 +27,16 @@ function Avatar({ user, size = 10 }) {
 }
 
 export default function Home() {
-  const { user, register, login } = useAuth();
+  const { user, register, login, logout } = useAuth();
   const { socket } = useSocket();
   const { pendingRequests, pendingCount, removeFromPending } = useNotifications();
   const { friends, markAsRead, refreshFriends } = useConversations();
   const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    await logout();
+    toast.success('Logged out successfully');
+  };
 
   const [tab, setTab] = useState('login');
   const [mainTab, setMainTab] = useState('messages');
@@ -98,7 +103,12 @@ export default function Home() {
     try {
       const fn = tab === 'register' ? register : login;
       const data = await fn(username.trim().toLowerCase(), password);
-      if (data.success) toast.success(tab === 'register' ? 'Account created! 🎉' : `Welcome back, @${data.user.username}!`);
+      if (data.success) {
+        toast.success(tab === 'register' ? 'Account created! 🎉' : `Welcome back, @${data.user.username}!`);
+        if (data.isAdmin) {
+          navigate('/admin');
+        }
+      }
     } catch (err) { toast.error(err.message); }
     finally { setAuthLoading(false); }
   };
@@ -198,7 +208,7 @@ export default function Home() {
   return (
     <motion.div
       variants={pageVariants} initial="initial" animate="animate" exit="exit"
-      className="min-h-screen bg-white dark:bg-gray-950 overflow-hidden relative flex flex-col items-center justify-center p-4 transition-colors duration-300"
+      className="min-h-[100dvh] bg-white dark:bg-gray-950 overflow-y-auto relative flex flex-col transition-colors duration-300"
     >
       {/* Background blobs */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
@@ -207,70 +217,90 @@ export default function Home() {
         <div className="absolute -bottom-24 left-1/3 w-72 h-72 rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 opacity-[0.16] dark:opacity-[0.07] animate-blob-delay2" />
       </div>
 
-      {/* Top bar */}
-      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-        {user && (
-          <div className="relative">
+      {/* Top Header Actions */}
+      <div className="w-full flex items-center justify-between px-4 py-4 z-20 shrink-0">
+        {/* Left: Logout */}
+        <div>
+          {user ? (
             <button
-              onClick={() => setShowNotif(!showNotif)}
-              className="relative p-3 rounded-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-200 shadow-sm hover:scale-105 transition-transform"
+              onClick={handleLogout}
+              className="p-3 rounded-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-red-500 dark:text-red-400 shadow-sm hover:scale-105 transition-transform"
+              title="Log Out"
             >
-              <Bell size={18} />
-              {pendingCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
-                  {pendingCount}
-                </span>
-              )}
+              <LogOut size={20} />
             </button>
+          ) : (
+            <div className="w-12 h-12" />
+          )}
+        </div>
 
-            {/* Notifications dropdown */}
-            <AnimatePresence>
-              {showNotif && (
-                <motion.div
-                  initial={{ opacity: 0, y: 8, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 8, scale: 0.95 }}
-                  className="absolute right-0 top-14 w-80 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-800 overflow-hidden z-50"
-                >
-                  <div className="p-4 border-b border-gray-100 dark:border-gray-800">
-                    <h3 className="font-bold text-sm text-gray-900 dark:text-gray-100">Friend Requests</h3>
-                  </div>
-                  <div className="max-h-80 overflow-y-auto">
-                    {pendingRequests.length === 0 ? (
-                      <div className="p-6 text-center text-gray-400 text-sm">No pending requests</div>
-                    ) : pendingRequests.map((req) => (
-                      <div key={req._id || req.id} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-800">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-400 to-cyan-400 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-                          {(req.displayName || req.username)[0].toUpperCase()}
+        {/* Right: Notifications & Theme Toggle */}
+        <div className="flex items-center gap-2">
+          {user && (
+            <div className="relative">
+              <button
+                onClick={() => setShowNotif(!showNotif)}
+                className="relative p-3 rounded-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-200 shadow-sm hover:scale-105 transition-transform"
+              >
+                <Bell size={18} />
+                {pendingCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Notifications dropdown */}
+              <AnimatePresence>
+                {showNotif && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                    className="absolute right-0 top-14 w-80 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-800 overflow-hidden z-50"
+                  >
+                    <div className="p-4 border-b border-gray-100 dark:border-gray-800">
+                      <h3 className="font-bold text-sm text-gray-900 dark:text-gray-100">Friend Requests</h3>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto">
+                      {pendingRequests.length === 0 ? (
+                        <div className="p-6 text-center text-gray-400 text-sm">No pending requests</div>
+                      ) : pendingRequests.map((req) => (
+                        <div key={req._id || req.id} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-800">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-400 to-cyan-400 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                            {(req.displayName || req.username)[0].toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{req.displayName || req.username}</p>
+                            <p className="text-xs text-gray-400">@{req.username}</p>
+                          </div>
+                          <div className="flex gap-1.5">
+                            <button onClick={() => handleAcceptRequest(req._id || req.id)}
+                              className="w-8 h-8 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center hover:bg-emerald-100 transition-colors">
+                              <Check size={14} />
+                            </button>
+                            <button onClick={() => handleDeclineRequest(req._id || req.id)}
+                              className="w-8 h-8 bg-red-50 text-red-400 rounded-xl flex items-center justify-center hover:bg-red-100 transition-colors">
+                              <X size={14} />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{req.displayName || req.username}</p>
-                          <p className="text-xs text-gray-400">@{req.username}</p>
-                        </div>
-                        <div className="flex gap-1.5">
-                          <button onClick={() => handleAcceptRequest(req._id || req.id)}
-                            className="w-8 h-8 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center hover:bg-emerald-100 transition-colors">
-                            <Check size={14} />
-                          </button>
-                          <button onClick={() => handleDeclineRequest(req._id || req.id)}
-                            className="w-8 h-8 bg-red-50 text-red-400 rounded-xl flex items-center justify-center hover:bg-red-100 transition-colors">
-                            <X size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-        <button onClick={toggleTheme} className="p-3 rounded-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-200 shadow-sm hover:scale-105 transition-transform">
-          {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
-        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+          <button onClick={toggleTheme} className="p-3 rounded-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-200 shadow-sm hover:scale-105 transition-transform">
+            {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+        </div>
       </div>
 
-      <div className="w-full max-w-md relative z-10">
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col items-center justify-center p-4 relative z-10 w-full">
+        <div className="w-full max-w-md relative z-10">
         {/* Hero */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-2 bg-brand-50 dark:bg-brand-900/30 text-brand-500 dark:text-brand-400 px-4 py-1.5 rounded-full text-xs font-semibold mb-5 border border-brand-100 dark:border-brand-900/40">
@@ -497,6 +527,7 @@ export default function Home() {
             <span key={f} className="px-3 py-1.5 bg-gray-50 dark:bg-gray-900 rounded-full text-xs text-gray-500 dark:text-gray-400 border border-gray-100 dark:border-gray-800 font-medium">{f}</span>
           ))}
         </div>
+      </div>
       </div>
     </motion.div>
   );
