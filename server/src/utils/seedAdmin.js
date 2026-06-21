@@ -23,7 +23,7 @@ const seedAdmin = async () => {
       const passwordMatch = await existing.comparePassword(adminPassword);
       if (!passwordMatch) {
         existing.passwordHash = adminPassword;
-        await existing.save(); // triggers pre-save bcrypt hash
+        await existing.save({ validateBeforeSave: false }); // triggers pre-save bcrypt hash
         logger.info(`🔑 Admin password updated for "${adminUsername}".`);
       }
     } else {
@@ -34,7 +34,7 @@ const seedAdmin = async () => {
         passwordHash: adminPassword,
         role: 'admin',
       });
-      await admin.save();
+      await admin.save({ validateBeforeSave: false });
       logger.info(`🔑 Admin user "${adminUsername}" seeded successfully.`);
     }
   } catch (err) {
