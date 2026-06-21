@@ -12,10 +12,19 @@ const useFriendStatus = ({ socket }) => {
       updateFriendStatus({ userId, isOnline, lastSeen });
     };
 
+    const handleSync = ({ statuses }) => {
+      console.log('🔄 Syncing friend statuses:', statuses.length);
+      statuses.forEach(({ userId, isOnline, lastSeen }) => {
+        updateFriendStatus({ userId, isOnline, lastSeen });
+      });
+    };
+
     socket.on('friend:status', handleStatusChange);
+    socket.on('friends:status:sync', handleSync);
 
     return () => {
       socket.off('friend:status', handleStatusChange);
+      socket.off('friends:status:sync', handleSync);
     };
   }, [socket, updateFriendStatus]);
 };

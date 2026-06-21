@@ -13,6 +13,7 @@ const dmSchema = new mongoose.Schema(
       content: { type: String, default: '' },
       type: { type: String, default: 'text' },
       senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      status: { type: String, default: 'sent' },
       createdAt: { type: Date, default: null },
     },
     unreadCount: {

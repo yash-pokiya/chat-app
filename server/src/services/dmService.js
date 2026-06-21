@@ -110,6 +110,7 @@ class DMService {
       content: content.slice(0, 60),
       type,
       senderId,
+      status: 'sent',
       createdAt: new Date()
     };
     

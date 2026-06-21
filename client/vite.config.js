@@ -31,6 +31,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['@emoji-mart/react', 'emoji-mart', '@emoji-mart/data', 'simple-peer'],
+    include: ['@emoji-mart/react', 'emoji-mart', '@emoji-mart/data', 'simple-peer', 'react-leaflet', 'leaflet'],
   },
 })

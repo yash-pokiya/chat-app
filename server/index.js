@@ -21,6 +21,7 @@ const callRoutes = require('./src/routes/callRoutes');
 const socketHandler = require('./src/socket/socketHandler');
 const { initCronJobs } = require('./src/jobs/cronJobs');
 const globalErrorHandler = require('./src/middleware/errorHandler');
+const User = require('./models/User');
 
 const app = express();
 const server = http.createServer(app);
@@ -110,10 +111,23 @@ app.use(globalErrorHandler);
 // ─── Database & Server Boot ──────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
+const resetOnlineStatusOnStartup = async () => {
+  try {
+    const result = await User.updateMany(
+      { isOnline: true },
+      { $set: { isOnline: false, lastSeen: new Date() } }
+    );
+    logger.info(`🔄 Reset ${result.modifiedCount} stale online statuses on startup`);
+  } catch (err) {
+    logger.error('Failed to reset online statuses on startup:', err);
+  }
+};
+
 mongoose
   .connect(process.env.MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     logger.info('[MongoDB] Connected successfully to Atlas cluster.');
+    await resetOnlineStatusOnStartup();
     server.listen(PORT, () => {
       logger.info(`[Server] Running on http://localhost:${PORT}`);
       logger.info(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);

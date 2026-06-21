@@ -9,7 +9,7 @@ import { useLocation } from '../hooks/useLocation';
 import ReactionBar from '../components/ReactionBar';
 import {
   ArrowLeft, Send, Image, MapPin, Video, Phone, FileText, Timer,
-  Pencil, Smile, MoreVertical, Pin, Reply, Copy, Trash2, Mic
+  Pencil, Smile, MoreVertical, Pin, Reply, Copy, Trash2, Mic, Plus
 } from 'lucide-react';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
@@ -19,7 +19,8 @@ import SharedNotepad from '../components/SharedNotepad';
 import DrawingCanvas from '../components/DrawingCanvas';
 import TimerBubble from '../components/TimerBubble';
 import LocationBubble from '../components/LocationBubble';
-import BlurredMedia from '../components/BlurredMedia';
+import ImageMessage from '../components/ImageMessage';
+import ImageLightbox from '../components/ImageLightbox';
 import { ReplyBar, QuotedMessage } from '../components/ReplyPreview';
 import UploadingBubble from '../components/UploadingBubble';
 import UnreadDivider from '../components/UnreadDivider';
@@ -39,7 +40,14 @@ const parseFormatting = (text) => {
 };
 
 function Avatar({ user, size = 8, className = '' }) {
-  const s = `w-${size} h-${size}`;
+  const sizeMap = {
+    8: 'w-8 h-8',
+    9: 'w-9 h-9',
+    10: 'w-10 h-10',
+    11: 'w-11 h-11',
+    12: 'w-12 h-12',
+  };
+  const s = sizeMap[size] || 'w-8 h-8';
   if (user?.avatar) return <img src={user.avatar} className={`${s} rounded-xl object-cover flex-shrink-0 ${className}`} alt={user.displayName} />;
   return (
     <div className={`${s} rounded-xl bg-gradient-to-br from-violet-400 to-cyan-400 flex items-center justify-center text-white font-bold text-xs flex-shrink-0 ${className}`}>
@@ -69,6 +77,9 @@ export default function DMChat() {
   const [showNotepad, setShowNotepad] = useState(false);
   const [showDrawing, setShowDrawing] = useState(false);
   const [showTimerInput, setShowTimerInput] = useState(false);
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const [lightboxSaveFn, setLightboxSaveFn] = useState(null);
   const [timerMinutes, setTimerMinutes] = useState('5');
   const [timerState, setTimerState] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
@@ -237,6 +248,14 @@ export default function DMChat() {
     const onMessagePinned = ({ message }) => setPinnedMessage(message);
     const onMessageUnpinned = () => setPinnedMessage(null);
 
+    const onMessagesStatusUpdate = ({ messageIds, status }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          messageIds.includes(m._id) ? { ...m, status } : m
+        )
+      );
+    };
+
     // Timer events
     const onTimerStarted = ({ seconds, totalSeconds }) => setTimerState({ seconds, totalSeconds, isRunning: true });
     const onTimerTick = ({ seconds, totalSeconds, isRunning }) => setTimerState({ seconds, totalSeconds, isRunning });
@@ -250,6 +269,7 @@ export default function DMChat() {
     socket.on('user-typing', onTyping);
     socket.on('user-stop-typing', onStopTyping);
     socket.on('message:reacted', onMessageReacted);
+    socket.on('messages:status:update', onMessagesStatusUpdate);
     socket.on('message:pinned', onMessagePinned);
     socket.on('message:unpinned', onMessageUnpinned);
     socket.on('timer:started', onTimerStarted);
@@ -262,6 +282,7 @@ export default function DMChat() {
       socket.off('user-typing', onTyping);
       socket.off('user-stop-typing', onStopTyping);
       socket.off('message:reacted', onMessageReacted);
+      socket.off('messages:status:update', onMessagesStatusUpdate);
       socket.off('message:pinned', onMessagePinned);
       socket.off('message:unpinned', onMessageUnpinned);
       socket.off('timer:started', onTimerStarted);
@@ -370,6 +391,7 @@ export default function DMChat() {
               message: {
                 content,
                 type: 'text',
+                status: res.message?.status || 'sent',
                 createdAt: res.message?.createdAt || new Date().toISOString(),
                 senderId: user?.id,
               },
@@ -438,7 +460,7 @@ export default function DMChat() {
       updateLastMessage({
         dmId,
         friendId: partner?.id,
-        message: { content: url, type: 'image', createdAt: res?.message?.createdAt || new Date().toISOString(), senderId: user?.id },
+        message: { content: url, type: 'image', status: res?.message?.status || 'sent', createdAt: res?.message?.createdAt || new Date().toISOString(), senderId: user?.id },
       });
     });
   };
@@ -528,7 +550,7 @@ export default function DMChat() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50 relative">
+    <div className="h-screen flex flex-col bg-gray-50 relative overflow-hidden">
       {/* Incoming call overlay — handled globally by CallProvider */}
 
       {/* Notepad */}
@@ -541,10 +563,10 @@ export default function DMChat() {
       <AnimatePresence>
         {showTimerInput && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
             onClick={(e) => { if (e.target === e.currentTarget) setShowTimerInput(false); }}>
             <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}
-              className="bg-white rounded-3xl p-6 w-72 shadow-2xl">
+              className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto">
               <h3 className="font-bold text-gray-900 mb-4 text-center">⏱️ Set Shared Timer</h3>
               <div className="flex items-center gap-3 mb-4">
                 <input type="number" min={1} max={60} value={timerMinutes}
@@ -590,29 +612,33 @@ export default function DMChat() {
       </AnimatePresence>
 
       {/* Top bar */}
-      <div className="frosted-bar px-4 py-3 flex items-center gap-3 z-10 flex-shrink-0">
-        <button onClick={() => navigate('/')} className="p-2 rounded-xl hover:bg-gray-100 text-gray-600">
-          <ArrowLeft size={20} />
+      <div className="flex-shrink-0 sticky top-0 z-20 bg-white/95 backdrop-blur-xl border-b border-gray-100 px-4 py-2.5 sm:py-3 flex items-center gap-3 pt-[calc(0.625rem+env(safe-area-inset-top))] shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+        <button onClick={() => navigate('/')} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors flex-shrink-0">
+          <ArrowLeft size={18} />
         </button>
         {partner && (
-          <Link to={`/profile/${partner.username}`} className="flex items-center gap-2.5 flex-1 min-w-0">
-            <div className="relative">
-              <Avatar user={partner} size={9} />
+          <Link to={`/profile/${partner.username}`} className="flex items-center gap-1.5 flex-1 min-w-0">
+            <div className="relative flex-shrink-0">
+              <Avatar user={partner} size={10} />
               <OnlineDot userId={partner.id || partner._id} size="sm" className="absolute -bottom-0.5 -right-0.5" />
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-gray-900 text-sm truncate">{partner.displayName || partner.username}</p>
-              <p className="text-xs text-gray-400">
-                {partnerTyping ? '✍️ typing...' : <StatusText userId={partner.id || partner._id} />}
+            <div className="flex-1 min-w-0 leading-tight">
+              <p className="font-semibold text-gray-900 text-[15px] truncate">
+                {partner.displayName || partner.username}
+              </p>
+              <p className="text-xs text-gray-400 truncate mt-0.5">
+                {partnerTyping
+                  ? <span className="text-violet-500 font-medium">typing...</span>
+                  : <StatusText userId={partner.id || partner._id} />}
               </p>
             </div>
           </Link>
         )}
-        <div className="flex items-center gap-1">
-          <button onClick={() => setShowNotepad(true)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors" title="Shared Notepad">
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button onClick={() => setShowNotepad(true)} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors" title="Shared Notepad">
             <FileText size={18} />
           </button>
-          <button onClick={() => setShowTimerInput(true)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors" title="Shared Timer">
+          <button onClick={() => setShowTimerInput(true)} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors" title="Shared Timer">
             <Timer size={18} />
           </button>
           {partner && (
@@ -630,7 +656,7 @@ export default function DMChat() {
                     avatar:      partner.avatar,
                   }, 'audio')
                 }}
-                className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors" 
+                className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors" 
                 title="Audio Call"
               >
                 <Phone size={18} />
@@ -648,7 +674,7 @@ export default function DMChat() {
                     avatar:      partner.avatar,
                   }, 'video')
                 }}
-                className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors" 
+                className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-500 transition-colors" 
                 title="Video Call"
               >
                 <Video size={18} />
@@ -670,7 +696,7 @@ export default function DMChat() {
       )}
 
       {/* Messages */}
-      <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
+      <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-5 py-5 space-y-3 min-h-0 bg-gradient-to-b from-gray-50/50 to-white">
         {messages.map((msg, idx) => {
           const mine = isMine(msg);
           const showDivider = firstUnreadId && msg._id === firstUnreadId;
@@ -681,16 +707,16 @@ export default function DMChat() {
               id={`msg-${msg._id}`}
               initial={initialScrollDone ? { opacity: 0, y: 10 } : false}
               animate={{ opacity: 1, y: 0 }}
-              className={`flex gap-2 ${mine ? 'justify-end' : 'justify-start'} msg-in`}
+              className={`flex gap-2.5 ${mine ? 'justify-end' : 'justify-start'} msg-in`}
               onContextMenu={(e) => { e.preventDefault(); handleLongPress(msg, e); }}
               onTouchStart={(e) => {
                 longPressRef.current = setTimeout(() => handleLongPress(msg, e), 500);
               }}
               onTouchEnd={() => clearTimeout(longPressRef.current)}
             >
-              {!mine && <Avatar user={msg.senderId} size={8} className="mt-auto mb-1" />}
+              {!mine && <Avatar user={msg.senderId} size={8} className="mt-auto mb-0.5 mr-0.5" />}
 
-              <div className={`max-w-[75%] ${mine ? 'items-end' : 'items-start'} flex flex-col gap-1 relative group`}>
+              <div className={`max-w-[78%] sm:max-w-[70%] lg:max-w-sm ${mine ? 'items-end' : 'items-start'} flex flex-col gap-1 relative group`}>
                 {/* Floating Emojis */}
                 <div className="absolute inset-0 pointer-events-none z-40 overflow-visible">
                   {floatingEmojis
@@ -723,7 +749,13 @@ export default function DMChat() {
                 <div className="relative flex items-center gap-2">
                   <div className="relative">
                     {msg.type === 'image' ? (
-                      <BlurredMedia src={msg.content} />
+                      <ImageMessage
+                        src={msg.content}
+                        onOpenLightbox={(url, saveFn) => {
+                          setLightboxImage(url);
+                          setLightboxSaveFn(() => saveFn);
+                        }}
+                      />
                     ) : msg.type === 'location' ? (
                       <LocationBubble
                         id={msg._id}
@@ -778,8 +810,8 @@ export default function DMChat() {
                 </div>
 
                 {/* Timestamp */}
-                <div className="flex items-center gap-1 px-1">
-                  <span className="text-xs text-gray-300">
+                <div className="flex items-center gap-1 px-1.5 mt-0.5">
+                  <span className="text-[11px] text-gray-400 font-medium">
                     {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                   {mine && <MessageTicks status={msg.status} />}
@@ -787,7 +819,7 @@ export default function DMChat() {
 
                 {/* Reactions display */}
                 {msg.reactions && msg.reactions.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1">
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
                     {Object.values(msg.reactions.reduce((acc, r) => {
                       if (!acc[r.emoji]) {
                         acc[r.emoji] = { emoji: r.emoji, count: 0, userIds: [] };
@@ -801,10 +833,10 @@ export default function DMChat() {
                         <button
                           key={idx}
                           onClick={() => handleReact(msg._id, r.emoji)}
-                          className={`border rounded-full px-2 py-0.5 text-xs flex items-center gap-1 shadow-sm hover:scale-110 active:scale-95 transition-all font-medium ${
+                          className={`border rounded-full px-2.5 py-1 text-xs flex items-center gap-1 shadow-sm hover:scale-110 active:scale-95 transition-all font-medium ${
                             hasReacted
-                              ? 'bg-violet-100 border-violet-300 text-violet-700 dark:bg-violet-900/50 dark:border-violet-800 dark:text-violet-200'
-                              : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-200'
+                              ? 'bg-violet-100 border-violet-300 text-violet-700'
+                              : 'bg-white border-gray-200 text-gray-800'
                           }`}
                         >
                           <span>{r.emoji}</span>
@@ -816,7 +848,7 @@ export default function DMChat() {
                 )}
               </div>
 
-              {mine && <Avatar user={user} size={8} className="mt-auto mb-1" />}
+              {mine && <Avatar user={user} size={8} className="mt-auto mb-0.5 ml-0.5" />}
             </motion.div>
             </React.Fragment>
           );
@@ -882,20 +914,31 @@ export default function DMChat() {
       </AnimatePresence>
 
       {/* Input bar */}
-      <div className="frosted-bar px-3 py-3 flex items-end gap-2 flex-shrink-0">
+      <div className="flex-shrink-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 px-3 sm:px-4 py-2.5 sm:py-3 flex items-end gap-1.5 sm:gap-2 pb-[calc(0.625rem+env(safe-area-inset-bottom))] shadow-[0_-1px_3px_rgba(0,0,0,0.03)]">
         <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
 
-        <button onClick={() => fileInputRef.current?.click()} className="p-2.5 rounded-xl hover:bg-gray-100 text-gray-400 transition-colors flex-shrink-0">
-          <Image size={20} />
-        </button>
-        <button onClick={() => setShowDrawing(true)} className="p-2.5 rounded-xl hover:bg-gray-100 text-gray-400 transition-colors flex-shrink-0">
-          <Pencil size={20} />
-        </button>
+        {/* Hide secondary icons on very small screens */}
+        <div className="hidden xs:flex items-center gap-0.5">
+          <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-400 transition-colors flex-shrink-0">
+            <Image size={19} />
+          </button>
+          <button onClick={() => setShowDrawing(true)} className="p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-400 transition-colors flex-shrink-0">
+            <Pencil size={19} />
+          </button>
+          <button
+            onClick={() => location.isSharing ? location.stop() : location.start()}
+            className={`p-2 rounded-xl transition-colors flex-shrink-0 ${location.isSharing ? 'bg-violet-100 text-violet-500' : 'hover:bg-gray-100 text-gray-400'}`}
+          >
+            <MapPin size={19} />
+          </button>
+        </div>
+
+        {/* On very narrow screens (<375px), collapse extra icons into a single "+" button */}
         <button
-          onClick={() => location.isSharing ? location.stop() : location.start()}
-          className={`p-2.5 rounded-xl transition-colors flex-shrink-0 ${location.isSharing ? 'bg-violet-100 text-violet-500' : 'hover:bg-gray-100 text-gray-400'}`}
+          onClick={() => setShowMoreOptions(true)}
+          className="xs:hidden p-2 rounded-xl hover:bg-gray-100 active:bg-gray-200 text-gray-400 flex-shrink-0"
         >
-          <MapPin size={20} />
+          <Plus size={19} />
         </button>
 
         <textarea
@@ -905,19 +948,98 @@ export default function DMChat() {
           onKeyDown={handleKeyDown}
           placeholder="Message..."
           rows={1}
-          className="flex-1 field-pill resize-none max-h-32 py-2.5 text-sm"
-          style={{ minHeight: '44px' }}
+          className="flex-1 min-w-0 field-pill resize-none max-h-32 py-2.5 px-4 text-[15px]"
+          style={{ minHeight: '42px' }}
         />
 
         <motion.button
           whileTap={{ scale: 0.9 }}
           onClick={handleSend}
           disabled={!input.trim() || sending}
-          className="w-11 h-11 rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 flex items-center justify-center text-white shadow-md hover:opacity-90 disabled:opacity-40 transition-all flex-shrink-0"
+          className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 flex items-center justify-center text-white shadow-md shadow-violet-200 hover:opacity-90 hover:shadow-lg disabled:opacity-40 disabled:shadow-none transition-all flex-shrink-0"
         >
-          <Send size={18} />
+          <Send size={17} />
         </motion.button>
       </div>
+
+      {/* Expandable options sheet on mobile */}
+      <AnimatePresence>
+        {showMoreOptions && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end justify-center"
+            onClick={() => setShowMoreOptions(false)}
+          >
+            <motion.div
+              initial={{ y: 100 }}
+              animate={{ y: 0 }}
+              exit={{ y: 100 }}
+              className="bg-white w-full rounded-t-3xl p-5 shadow-2xl pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="font-bold text-gray-900 mb-4 text-center">More Actions</h3>
+              <div className="grid grid-cols-3 gap-4">
+                <button
+                  onClick={() => {
+                    setShowMoreOptions(false);
+                    fileInputRef.current?.click();
+                  }}
+                  className="flex flex-col items-center gap-2 p-3 rounded-2xl hover:bg-gray-50 active:scale-95 transition-all text-gray-600"
+                >
+                  <div className="w-12 h-12 rounded-full bg-violet-100 flex items-center justify-center text-violet-500">
+                    <Image size={24} />
+                  </div>
+                  <span className="text-xs font-semibold">Send Image</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowMoreOptions(false);
+                    setShowDrawing(true);
+                  }}
+                  className="flex flex-col items-center gap-2 p-3 rounded-2xl hover:bg-gray-50 active:scale-95 transition-all text-gray-600"
+                >
+                  <div className="w-12 h-12 rounded-full bg-cyan-100 flex items-center justify-center text-cyan-500">
+                    <Pencil size={24} />
+                  </div>
+                  <span className="text-xs font-semibold">Drawing Canvas</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowMoreOptions(false);
+                    if (location.isSharing) {
+                      location.stop();
+                    } else {
+                      location.start();
+                    }
+                  }}
+                  className="flex flex-col items-center gap-2 p-3 rounded-2xl hover:bg-gray-50 active:scale-95 transition-all text-gray-600"
+                >
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center ${location.isSharing ? 'bg-green-100 text-green-500' : 'bg-pink-100 text-pink-500'}`}>
+                    <MapPin size={24} />
+                  </div>
+                  <span className="text-xs font-semibold">{location.isSharing ? 'Stop Location' : 'Share Location'}</span>
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Image Lightbox */}
+      {lightboxImage && (
+        <ImageLightbox
+          src={lightboxImage}
+          onSave={lightboxSaveFn}
+          onClose={() => {
+            setLightboxImage(null);
+            setLightboxSaveFn(null);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Lightbox from 'yet-another-react-lightbox';
 import 'yet-another-react-lightbox/styles.css';
 import { Smile, CornerUpLeft, Volume2, Play, Pause, Copy, Check, Shield, Pin } from 'lucide-react';
-import BlurredMedia from './BlurredMedia';
+
 import { QuotedMessage } from './ReplyPreview';
 import ReactionBar from './ReactionBar';
 
@@ -50,7 +50,7 @@ const DoubleColoredTick = () => (
 
 const MessageTicks = ({ status }) => {
   if (status === 'delivered') return <DoubleGrayTick />;
-  if (status === 'read') return <DoubleColoredTick />;
+  if (status === 'read' || status === 'seen') return <DoubleColoredTick />;
   return <SingleGrayTick />;
 };
 
@@ -264,7 +264,19 @@ export default function MessageBubble({ message, isSent, showAvatar, partnerName
 
             {/* Main content body */}
             {isImage ? (
-              <BlurredMedia src={message.content} />
+              <>
+                <img
+                  src={message.content}
+                  onClick={() => setOpen(true)}
+                  className="rounded-2xl w-full max-w-[200px] sm:max-w-[240px] h-auto object-cover cursor-pointer hover:opacity-95 transition-opacity"
+                  alt="Sent image"
+                />
+                <Lightbox
+                  open={open}
+                  close={() => setOpen(false)}
+                  slides={[{ src: message.content }]}
+                />
+              </>
             ) : isAudio ? (
               <div className={isSent ? 'bubble-sent dark:bg-violet-900/50' : 'bubble-recv dark:bg-gray-800'}>
                 <AudioPlayer src={message.content} duration={message.duration} isSent={isSent} />

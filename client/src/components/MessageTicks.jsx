@@ -39,7 +39,7 @@ const MessageTicks = ({ status }) => {
   }
 
   // Double BLUE/VIOLET tick = seen/read
-  if (status === 'seen') {
+  if (status === 'seen' || status === 'read') {
     return (
       <svg width="18" height="10" viewBox="0 0 18 10" className="flex-shrink-0">
         <path

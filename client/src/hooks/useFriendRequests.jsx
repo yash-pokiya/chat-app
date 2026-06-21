@@ -103,6 +103,7 @@ const useFriendRequests = ({ socket, currentUser }) => {
         (t) => (
           <FriendRequestToast
             fromUser={fromUser}
+            duration={8000}
             onAccept={() => {
               toast.dismiss(t.id);
               handleAccept(fromUser);
@@ -115,7 +116,8 @@ const useFriendRequests = ({ socket, currentUser }) => {
         ),
         {
           duration: 8000,
-          position: 'top-right',
+          position: window.innerWidth < 640 ? 'top-center' : 'top-right',
+          id: `friend-req-${targetUserId}`,
         }
       );
       activeToasts.current[targetUserId] = toastId;

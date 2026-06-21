@@ -57,9 +57,7 @@ const ActiveCall = ({
 
       {isVideo && (
         <video ref={localVideoRef} autoPlay muted playsInline
-               className="absolute bottom-28 right-4 w-28 h-40
-                          rounded-2xl object-cover shadow-lg
-                          border-2 border-white/20 z-20 bg-gray-800" />
+               className="absolute right-3 sm:right-4 bottom-[calc(7rem+env(safe-area-inset-bottom))] sm:bottom-28 w-24 h-32 sm:w-28 sm:h-40 rounded-2xl object-cover shadow-lg border-2 border-white/20 z-20 bg-gray-800" />
       )}
 
       {callState.status === 'connected' && (
@@ -71,9 +69,7 @@ const ActiveCall = ({
       )}
 
       {/* Proper icon buttons — no emoji */}
-      <div className="absolute bottom-0 left-0 right-0 pb-8 pt-6
-                      bg-gradient-to-t from-black/60 to-transparent
-                      flex items-center justify-center gap-5 z-30">
+      <div className="absolute bottom-0 left-0 right-0 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-6 bg-gradient-to-t from-black/60 to-transparent flex items-center justify-center gap-4 sm:gap-5 z-30">
 
         <button
           onClick={() => { onToggleMic(); setMicOn(p => !p) }}

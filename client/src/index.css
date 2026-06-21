@@ -109,14 +109,10 @@
 
   /* Pill input (chat bar) */
   .field-pill {
-    @apply w-full px-5 py-3 rounded-full text-sm text-ink;
-    @apply bg-surface-soft border border-transparent;
-    @apply placeholder-ink-faint outline-none resize-none;
-    transition: background 0.2s, box-shadow 0.2s;
+    @apply w-full rounded-full border border-transparent outline-none transition-colors bg-gray-100 text-ink;
   }
   .field-pill:focus {
-    background: #fff;
-    box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.15);
+    @apply bg-white border-violet-300 shadow-sm shadow-violet-100;
   }
 
   /* White card */
@@ -135,15 +131,16 @@
 
   /* Chat bubble — sent (gradient) */
   .bubble-sent {
-    @apply text-white text-sm leading-relaxed px-4 py-2.5 rounded-3xl rounded-br-lg;
+    @apply text-white text-sm leading-relaxed px-4 py-2.5 rounded-2xl rounded-br-md;
     background: linear-gradient(135deg, #6C63FF 0%, #48CAE4 100%);
-    box-shadow: 0 2px 12px rgba(108, 99, 255, 0.25);
+    box-shadow: 0 2px 12px rgba(108, 99, 255, 0.15), 0 4px 20px rgba(108, 99, 255, 0.1);
     max-width: 320px;
   }
 
   /* Chat bubble — received */
   .bubble-recv {
-    @apply bg-surface-muted text-ink text-sm leading-relaxed px-4 py-2.5 rounded-3xl rounded-bl-lg;
+    @apply bg-white text-gray-800 text-sm leading-relaxed px-4 py-2.5 rounded-2xl rounded-bl-md border border-gray-100;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
     max-width: 320px;
   }
 
@@ -303,9 +300,17 @@
   .animate-blob-delay2{ animation: blob 10s ease-in-out infinite 4s; }
 
   /* Leaflet z-index fix */
-  .leaflet-pane { z-index: 1 !important; }
-  .leaflet-control { z-index: 2 !important; }
-  .leaflet-top, .leaflet-bottom { z-index: 2 !important; }
+  .leaflet-container {
+    z-index: 1 !important;
+    border-radius: 1rem;
+  }
+  .leaflet-top, .leaflet-bottom {
+    z-index: 10 !important;
+  }
+  .leaflet-pane,
+  .leaflet-control {
+    z-index: 1 !important;
+  }
 
   /* PopIn animation for Reaction Bar */
   @keyframes popIn {

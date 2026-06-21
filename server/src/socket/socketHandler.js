@@ -70,6 +70,36 @@ const emitToUser = (userId, event, data) => {
 const socketHandler = (io) => {
   ioInstance = io;
 
+  // Dev-only periodic health check
+  if (process.env.NODE_ENV !== 'production') {
+    setInterval(async () => {
+      try {
+        const onlineUserIds = await User.find({ isOnline: true }).select('_id').lean();
+        for (const { _id } of onlineUserIds) {
+          const uid = _id.toString();
+          if (!isUserOnline(uid)) {
+            await User.findByIdAndUpdate(uid, {
+              isOnline: false,
+              lastSeen: new Date(),
+            });
+            logger.info(`🔧 [Dev healthcheck] Corrected stale online status: ${uid}`);
+
+            const userDoc = await User.findById(uid).select('friends').lean();
+            userDoc?.friends?.forEach(friendId => {
+              emitToUser(friendId.toString(), 'friend:status', {
+                userId: uid,
+                isOnline: false,
+                lastSeen: new Date(),
+              });
+            });
+          }
+        }
+      } catch (err) {
+        logger.error('[Dev healthcheck] Error running online status cleanup:', err);
+      }
+    }, 30000); // run every 30 seconds
+  }
+
   // Asynchronous Handshake Authentication Middleware
   io.use((socket, next) => {
     try {
@@ -133,6 +163,70 @@ const socketHandler = (io) => {
           lastSeen: new Date(),
         });
       });
+
+      // Send real-time status of all friends to this user immediately
+      try {
+        const friendStatuses = await Promise.all(
+          (user?.friends || []).map(async (friendId) => {
+            const fid = friendId.toString();
+            const friendUser = await User.findById(fid).select('isOnline lastSeen').lean();
+            return {
+              userId: fid,
+              isOnline: isUserOnline(fid) && !!friendUser?.isOnline,
+              lastSeen: friendUser?.lastSeen,
+            };
+          })
+        );
+        socket.emit('friends:status:sync', { statuses: friendStatuses });
+      } catch (err) {
+        logger.error('[Socket] failed to sync friends status:', err);
+      }
+
+      // Auto-deliver all 'sent' messages sent to this user (currentUserId) in all DMs
+      try {
+        const userDMs = await DM.find({ participants: currentUserId }).select('_id participants').lean();
+        for (const dm of userDMs) {
+          const partnerId = dm.participants.find(p => p.toString() !== currentUserId);
+          if (partnerId) {
+            const partnerStr = partnerId.toString();
+            const sentMessages = await Message.find({
+              dmId: dm._id,
+              senderId: partnerId,
+              status: 'sent'
+            }).select('_id').lean();
+
+            if (sentMessages.length > 0) {
+              const messageIds = sentMessages.map(m => m._id.toString());
+              
+              await Message.updateMany(
+                { _id: { $in: sentMessages.map(m => m._id) } },
+                { $set: { status: 'delivered' } }
+              );
+
+              await DM.updateOne(
+                {
+                  _id: dm._id,
+                  'lastMessage.senderId': partnerId,
+                  'lastMessage.status': 'sent'
+                },
+                {
+                  $set: {
+                    'lastMessage.status': 'delivered'
+                  }
+                }
+              );
+
+              emitToUser(partnerStr, 'messages:status:update', {
+                dmId: dm._id.toString(),
+                messageIds,
+                status: 'delivered'
+              });
+            }
+          }
+        }
+      } catch (err) {
+        logger.error('[Socket] failed to mark messages as delivered on user:online:', err);
+      }
 
       // Send missed notifications
       try {
@@ -237,6 +331,19 @@ const socketHandler = (io) => {
           $set: {
             status: 'seen',
             seenAt: new Date(),
+          }
+        }
+      );
+
+      await DM.updateOne(
+        {
+          _id: conversationId,
+          'lastMessage.senderId': senderId,
+          'lastMessage.status': { $ne: 'seen' }
+        },
+        {
+          $set: {
+            'lastMessage.status': 'seen'
           }
         }
       );
@@ -398,7 +505,7 @@ const socketHandler = (io) => {
         }
 
         const previewContent = type === 'image' ? '📷 Photo' : (content || '').slice(0, 60);
-        dm.lastMessage = { content: previewContent, type, senderId: socket.userId, createdAt: new Date() };
+        dm.lastMessage = { content: previewContent, type, senderId: socket.userId, status, createdAt: new Date() };
         
         if (!isChatOpen) {
           const partnerUnread = dm.unreadCount.get(receiverId) || 0;
@@ -798,7 +905,7 @@ const socketHandler = (io) => {
         });
 
         const statusText = status === 'completed' ? `${callType === 'video' ? '📹' : '📞'} Call` : `${callType === 'video' ? '📹' : '📞'} ${status}`;
-        dm.lastMessage = { content: statusText, type: 'call_log', senderId: callerId || socket.userId, createdAt: new Date() };
+        dm.lastMessage = { content: statusText, type: 'call_log', senderId: callerId || socket.userId, status: 'delivered', createdAt: new Date() };
         await dm.save();
 
         const payload = { ...message.toJSON(), dmId };

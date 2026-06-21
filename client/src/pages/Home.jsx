@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import api from '../utils/api';
 import { OnlineDot } from '../components/OnlineStatus';
+import MessageTicks from '../components/MessageTicks';
 
 const pageVariants = {
   initial: { opacity: 0, y: 20 },
@@ -429,9 +430,14 @@ export default function Home() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-gray-900 dark:text-gray-100 text-sm">{friend.displayName || friend.username}</p>
-                    <p className="text-xs text-gray-400 truncate">
-                      {friend.lastMessage ? friend.lastMessage.content : 'Start chatting!'}
-                    </p>
+                    <div className="flex items-center gap-1 mt-0.5 text-xs text-gray-400">
+                      {friend.lastMessage && (friend.lastMessage.senderId === user.id || friend.lastMessage.senderId?.toString() === (user.id || user._id)?.toString()) && (
+                        <MessageTicks status={friend.lastMessage.status} />
+                      )}
+                      <span className="truncate flex-1">
+                        {friend.lastMessage ? friend.lastMessage.content : 'Start chatting!'}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
                     {friend.lastMessage?.createdAt && (
@@ -440,8 +446,14 @@ export default function Home() {
                       </span>
                     )}
                     {friend.unreadCount > 0 && (
-                      <span className="w-5 h-5 bg-violet-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
-                        {friend.unreadCount > 9 ? '9+' : friend.unreadCount}
+                      <span className="px-2 py-0.5 min-w-5 h-5 bg-violet-500 text-white text-[10px] rounded-full flex items-center justify-center font-bold whitespace-nowrap shadow-sm">
+                        {friend.unreadCount === 1
+                          ? '1'
+                          : friend.unreadCount === 2
+                            ? '2 messages'
+                            : friend.unreadCount === 3
+                              ? '2+ messages'
+                              : '4+ messages'}
                       </span>
                     )}
                   </div>

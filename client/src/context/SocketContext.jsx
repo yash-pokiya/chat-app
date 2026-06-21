@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
 
@@ -27,27 +27,36 @@ export const SocketProvider = ({ children }) => {
       auth: { token },
       withCredentials: true,
       transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 3000,
     });
 
     setSocket(socketInstance);
 
+    const userId = user._id || user.id;
+
+    const registerOnline = () => {
+      if (userId) {
+        socketInstance.emit('user:online', { userId });
+        console.log('🟢 [Socket] Registered online:', socketInstance.id);
+      }
+    };
+
     socketInstance.on('connect', () => {
       console.log('[Socket] Connected:', socketInstance.id);
       setConnected(true);
-      const userId = user._id || user.id;
-      if (userId) {
-        socketInstance.emit('user:online', { userId });
-        console.log('🟢 user:online emitted on connect');
-      }
+      registerOnline();
     });
 
-    socketInstance.io.on('reconnect', () => {
-      console.log('🔄 Socket reconnected');
-      const userId = user._id || user.id;
-      if (userId) {
-        socketInstance.emit('user:online', { userId });
-        console.log('🟢 user:online emitted on reconnect');
-      }
+    socketInstance.on('reconnect', () => {
+      console.log('🔄 [Socket] Reconnected, re-registering...');
+      registerOnline();
+    });
+
+    socketInstance.io.on('reconnect_attempt', () => {
+      console.log('🔄 [Socket] Attempting reconnect...');
     });
 
     socketInstance.on('disconnect', (reason) => {

@@ -47,7 +47,7 @@ export default function SharedNotepad({ roomCode, socket, onClose }) {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end justify-center p-4"
+        className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
         onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       >
         <motion.div
@@ -55,7 +55,7 @@ export default function SharedNotepad({ roomCode, socket, onClose }) {
           animate={{ y: 0 }}
           exit={{ y: '100%' }}
           transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-          className="bg-white w-full max-w-lg rounded-t-3xl pt-2 pb-6 px-6 shadow-2xl"
+          className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto"
         >
           {/* Handle */}
           <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4" />

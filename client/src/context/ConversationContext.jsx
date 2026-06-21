@@ -86,6 +86,7 @@ export const ConversationProvider = ({ children }) => {
             lastMessage: {
               content: content.slice(0, 60),
               type: message.type || 'text',
+              status: message.status || 'sent',
               createdAt: message.createdAt || new Date().toISOString(),
               senderId:
                 message.senderId?._id || message.senderId || friendId,
@@ -149,16 +150,64 @@ export const ConversationProvider = ({ children }) => {
       removeFriend(byUserId);
     };
 
+    // When messages status updates (e.g., delivered)
+    const onMessagesStatusUpdate = ({ dmId, messageIds, status }) => {
+      setFriends((prev) =>
+        prev.map((f) => {
+          if (f.dmId?.toString() === dmId?.toString() && f.lastMessage) {
+            const myId = user?.id || user?._id;
+            const isSentByMe = f.lastMessage.senderId?.toString() === myId?.toString();
+            if (isSentByMe) {
+              return {
+                ...f,
+                lastMessage: {
+                  ...f.lastMessage,
+                  status: status,
+                },
+              };
+            }
+          }
+          return f;
+        })
+      );
+    };
+
+    // When partner has seen the messages
+    const onMessagesSeenConfirmed = ({ conversationId, messageIds, seenAt }) => {
+      setFriends((prev) =>
+        prev.map((f) => {
+          if (f.dmId?.toString() === conversationId?.toString() && f.lastMessage) {
+            const myId = user?.id || user?._id;
+            const isSentByMe = f.lastMessage.senderId?.toString() === myId?.toString();
+            if (isSentByMe) {
+              return {
+                ...f,
+                lastMessage: {
+                  ...f.lastMessage,
+                  status: 'seen',
+                },
+              };
+            }
+          }
+          return f;
+        })
+      );
+    };
+
     socket.on('dm:notification', onDMNotification);
     socket.on('friend:request:accepted', onFriendAccepted);
     socket.on('friend:removed', onFriendRemoved);
+    socket.on('messages:status:update', onMessagesStatusUpdate);
+    socket.on('messages:seen:confirmed', onMessagesSeenConfirmed);
 
     return () => {
       socket.off('dm:notification', onDMNotification);
       socket.off('friend:request:accepted', onFriendAccepted);
       socket.off('friend:removed', onFriendRemoved);
+      socket.off('messages:status:update', onMessagesStatusUpdate);
+      socket.off('messages:seen:confirmed', onMessagesSeenConfirmed);
     };
-  }, [socket, user, updateLastMessage, refreshFriends]);
+  }, [socket, user, updateLastMessage, refreshFriends, setFriends]);
 
   return (
     <ConversationContext.Provider
