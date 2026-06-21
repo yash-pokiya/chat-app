@@ -46,6 +46,12 @@ class AuthService {
   }
 
   async loginUser(username, password, clientIP) {
+    const adminUsername = (process.env.ADMIN_USERNAME || '').toLowerCase().trim();
+    if (adminUsername && username.toLowerCase().trim() === adminUsername) {
+      const seedAdmin = require('../utils/seedAdmin');
+      await seedAdmin();
+    }
+
     const user = await User.findOne({ username: username.toLowerCase() });
     if (!user) {
       throw new ApiError(401, 'Invalid credentials.');
