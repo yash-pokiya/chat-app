@@ -18,24 +18,24 @@ const adminLogin = catchAsync(async (req, res, next) => {
     return next(new ApiError(400, 'Username and password are required.'));
   }
 
-  // Constant-time checks on the username string
-  const usernameBuffer = Buffer.from(username);
-  const targetUsernameBuffer = Buffer.from(process.env.ADMIN_USERNAME || '');
-  const isUsernameMatch = usernameBuffer.length === targetUsernameBuffer.length &&
-    crypto.timingSafeEqual(usernameBuffer, targetUsernameBuffer);
+  const adminUsername = (process.env.ADMIN_USERNAME || '').toLowerCase().trim();
+  if (username.toLowerCase().trim() !== adminUsername) {
+    return next(new ApiError(401, 'Invalid admin credentials.'));
+  }
 
-  // Secure validation of password utilizing bcrypt
-  const isPasswordMatch = await bcrypt.compare(
-    password,
-    process.env.ADMIN_PASSWORD_HASH || ''
-  );
+  // Verify credentials against database seeded admin user
+  const user = await User.findOne({ username: adminUsername });
+  if (!user || user.role !== 'admin') {
+    return next(new ApiError(401, 'Invalid admin credentials.'));
+  }
 
-  if (!isUsernameMatch || !isPasswordMatch) {
+  const isPasswordMatch = await user.comparePassword(password);
+  if (!isPasswordMatch) {
     return next(new ApiError(401, 'Invalid admin credentials.'));
   }
 
   const token = jwt.sign(
-    { username, role: 'admin' },
+    { username: user.username, role: 'admin' },
     process.env.ADMIN_JWT_SECRET,
     { expiresIn: '8h' }
   );
@@ -47,7 +47,7 @@ const adminLogin = catchAsync(async (req, res, next) => {
     maxAge: 8 * 60 * 60 * 1000,
   });
 
-  logger.info(`Admin logged in successfully: ${username}`);
+  logger.info(`Admin logged in successfully: ${user.username}`);
   res.status(200).json(new ApiResponse(200, { token }, 'Admin logged in successfully.'));
 });
 
@@ -73,7 +73,7 @@ const getRooms = catchAsync(async (req, res) => {
       return {
         id: room._id,
         code: room.code,
-        users: room.users.map((u) => ({ id: u._id, username: u.username })),
+        users: (room.users || []).filter(u => u).map((u) => ({ id: u._id, username: u.username })),
         isActive: room.isActive,
         messageCount,
         mediaCount,

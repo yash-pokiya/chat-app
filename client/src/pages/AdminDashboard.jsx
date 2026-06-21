@@ -52,11 +52,13 @@ export default function AdminDashboard() {
       setMedia(m.data.media || []);
       setUsers(u.data.users || []);
     } catch (err) {
-      if (err.message?.includes('401') || err.message?.includes('Invalid')) {
-        toast.error('Session expired.');
+      if (err.message?.includes('401') || err.message?.includes('Invalid') || err.message?.includes('denied') || err.message?.includes('token')) {
+        toast.error(`Session expired: ${err.message}`);
         localStorage.removeItem('adminToken');
         navigate('/admin/login');
-      } else toast.error('Failed to load dashboard.');
+      } else {
+        toast.error(err.message || 'Failed to load dashboard.');
+      }
     } finally {
       setLoading(false); setRefreshing(false);
     }
