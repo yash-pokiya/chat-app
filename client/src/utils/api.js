@@ -11,7 +11,7 @@ const api = axios.create({
 // Attach token from localStorage as fallback (for non-cookie browsers)
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
-  if (token) {
+  if (token && !config.url?.includes('/admin')) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -20,7 +20,7 @@ api.interceptors.request.use((config) => {
 // Attach admin token
 api.interceptors.request.use((config) => {
   const adminToken = localStorage.getItem('adminToken');
-  if (adminToken && config.url?.startsWith('/admin')) {
+  if (adminToken && config.url?.includes('/admin')) {
     config.headers.Authorization = `Bearer ${adminToken}`;
   }
   return config;
